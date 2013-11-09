@@ -1,1 +1,2 @@
 *.o
+/Main_flymake.hs
