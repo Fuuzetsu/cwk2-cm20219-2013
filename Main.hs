@@ -163,7 +163,6 @@ main = do
   keyboardMouseCallback $= Just (keyboardMouse ps)
   reshapeCallback $= Just reshape
   motionCallback $= Just (motion ps)
-  mouseWheelCallback $= Just wheel
   depthFunc $= Just Lequal
   matrixMode $= Projection
   perspective 40.0 1.0 1.0 10.0
@@ -269,9 +268,6 @@ motion ps p@(Position newX newY) = do
       else ps $=! programState { dragState = (nowMS, Just p) }
 
 
-wheel :: MouseWheelCallback
-wheel _ direction pos = print direction >> print pos
-
 keyboardMouse :: IORef ProgramState -> KeyboardMouseCallback
 keyboardMouse ps key Down _ _ = case key of
   Char 'q' -> exitSuccess
@@ -293,12 +289,14 @@ keyboardMouse ps key Down _ _ = case key of
   MouseButton LeftButton -> setLeftButton ps Down >> resetDrag ps
   MouseButton RightButton -> setRightButton ps Down >> resetDrag ps
   MouseButton MiddleButton -> setMiddleButton ps Down >> resetDrag ps
+  MouseButton WheelDown -> get ps >>= \p -> ps $=! p { radiusState = radiusState p - 1.0 }
   _ -> print "Mouse down"
 
 keyboardMouse ps key Up _ _ = case key of
   MouseButton LeftButton -> setLeftButton ps Up
   MouseButton RightButton -> setRightButton ps Up
   MouseButton MiddleButton -> setMiddleButton ps Up
+  MouseButton WheelUp -> get ps >>= \p -> ps $=! p { radiusState = radiusState p + 1.0 }
   _ -> print "Mouse up"
 
 resetDrag :: IORef ProgramState -> IO ()
