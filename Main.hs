@@ -15,6 +15,7 @@ data ProgramState = ProgramState { cameraRotation :: CameraRotation
                                  , angleState :: GLfloat
                                  , dragState :: (MouseState, Maybe Position)
                                  , extraInfo :: [String]
+                                 , radiusState :: GLdouble
                                  }
 
 defaultState :: ProgramState
@@ -26,6 +27,7 @@ defaultState = ProgramState
   , angleState = 0.0
   , dragState = (MouseState Up Up Up, Nothing)
   , extraInfo = []
+  , radiusState = 10.0
   }
 
 ctvf :: CameraRotation -> Vertex3 GLdouble
@@ -78,13 +80,11 @@ display ps = do
   clear [ColorBuffer, DepthBuffer]
 
   loadIdentity
-  preservingMatrix (renderInfo programState)
+--  preservingMatrix (renderInfo programState)
   light (Light 0) $= if' l Enabled Disabled
-  let CameraRotation x' y' z' = c
-      Vertex3 dx dy dz = ctvd c
   lookAt (ctvf c) (Vertex3 0.0 0.0 0.0) (Vector3 0.0 1.0 0.0)
   rotate (xangle) $ Vector3 1.0 0.0 0.0
-  rotate (yangle + a) $ Vector3 0.0 1.0 0.0
+  rotate (yangle) $ Vector3 0.0 1.0 0.0
   rotate (zangle) $ Vector3 0.0 0.0 1.0
   ps $=! programState { angleState = angleState programState + 1.0 }
 
@@ -250,10 +250,15 @@ motion ps p@(Position newX newY) = do
     Just (Position oldX oldY) ->
       if oldMS == nowMS
       then do
-        let (dx, dy) = (fromIntegral (newX - oldX) / 100, fromIntegral (newY - oldY) / 100)
+        let theta = (fromIntegral $ newX - oldX) * 0.005
+            phi = (fromIntegral $ newY - oldY) * 0.005
+            radius = radiusState programState
+            eyeX = -(radius * (cos phi) * (sin theta))
+            eyeY = -(radius * sin phi * sin theta)
+            eyeZ = radius * cos theta
             CameraRotation xc yc zc = cameraRotation programState
             newCR = case mouseState programState of
-              MouseState Down _ _ -> CameraRotation xc yc zc
+              MouseState Down _ _ -> CameraRotation eyeX eyeY eyeZ
       --        MouseState _ Down _ -> CameraRotation xc (yc + 2) zc
               MouseState _ _ _ -> cameraRotation programState
 
@@ -285,9 +290,9 @@ keyboardMouse ps key Down _ _ = case key of
     p <- get ps
     let CameraRotation x y z = cameraRotation p
     ps $=! p { cameraRotation = CameraRotation x y (z + 1) }
-  MouseButton LeftButton -> setLeftButton ps Down
-  MouseButton RightButton -> setRightButton ps Down
-  MouseButton MiddleButton -> setMiddleButton ps Down
+  MouseButton LeftButton -> setLeftButton ps Down >> resetDrag ps
+  MouseButton RightButton -> setRightButton ps Down >> resetDrag ps
+  MouseButton MiddleButton -> setMiddleButton ps Down >> resetDrag ps
   _ -> print "Mouse down"
 
 keyboardMouse ps key Up _ _ = case key of
@@ -296,6 +301,11 @@ keyboardMouse ps key Up _ _ = case key of
   MouseButton MiddleButton -> setMiddleButton ps Up
   _ -> print "Mouse up"
 
+resetDrag :: IORef ProgramState -> IO ()
+resetDrag ps = do
+  p <- get ps
+  let (m, _) = dragState p
+  ps $=! p { dragState = (m, Nothing) }
 
 setLeftButton :: IORef ProgramState -> KeyState -> IO ()
 setLeftButton ps s = do
