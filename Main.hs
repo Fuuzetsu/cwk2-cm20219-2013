@@ -8,6 +8,32 @@ import System.Exit
 vertex3f :: (GLfloat, GLfloat, GLfloat) -> IO ()
 vertex3f (x, y, z) = vertex $ Vertex3 x y z
 
+data ProgramState = ProgramState { cameraRotation :: CameraRotation
+                                 , mouseState :: MouseState
+                                 , lightState :: LightState
+                                 , fillState :: FillState
+                                 , angleState :: GLfloat
+                                 }
+
+defaultState :: ProgramState
+defaultState = ProgramState
+  { cameraRotation = CameraRotation 0.0 0.0 0.0
+  , mouseState = MouseState Up Up
+  , lightState = True
+  , fillState = True
+  , angleState = 0.0
+  }
+
+type LightState = Bool
+type FillState = Bool
+
+data MouseState = MouseState { leftButton :: KeyState
+                             , rightButton :: KeyState
+                             }
+
+data CameraRotation = CameraRotation GLfloat GLfloat GLfloat
+                      deriving (Eq, Show)
+
 cube :: GLfloat -> IO ()
 cube w = renderPrimitive Quads $ mapM_ vertex3f
   [ ( w, w, w), ( w, w,-w), ( w,-w,-w), ( w,-w, w),
@@ -31,19 +57,20 @@ xangle = 0.0
 yangle = 0.0
 zangle = 0.0
 
-display :: IORef Bool -> IORef GLfloat
-           -> IORef Bool -> DisplayCallback
-display lights angle f = do
+display :: IORef ProgramState -> DisplayCallback
+display ps = do
+  programState <- get ps
+  let l = lightState programState
+      a = angleState programState
+      f = fillState programState
   clear [ColorBuffer, DepthBuffer]
   loadIdentity
-  l <- get lights
-  light (Light 0) $= (if' l Enabled Disabled)
+  light (Light 0) $= if' l Enabled Disabled
   lookAt (Vertex3 5.0 5.0 5.0) (Vertex3 0.0 0.0 0.0) (Vector3 0.0 1.0 0.0)
-  a <- get angle
   rotate (xangle + a) $ Vector3 1.0 0.0 0.0
-  rotate yangle $ Vector3 0.0 1.0 0.0
+  rotate (yangle + a) $ Vector3 0.0 1.0 0.0
   rotate zangle $ Vector3 0.0 0.0 1.0
-  angle $~! (+ 1)
+  ps $=! programState { angleState = angleState programState + 1 }
 
   drawCube f
   swapBuffers
@@ -59,12 +86,11 @@ drawFace filled s =
 if' :: Bool -> a -> a -> a
 if' p f g = if p then f else g
 
-drawCube :: IORef Bool -> IO ()
-drawCube fi = do
-  filled <- get fi
+drawCube :: Bool -> IO ()
+drawCube filled = do
   drawFace filled w
 
-  mapM_ (const $ r q 1 0 0 >> drawFace filled w) [1 .. 3]
+  mapM_ (const $ r q 1 0 0 >> drawFace filled w) [1 .. 3 :: Integer]
 
   r q 1 0 0
   r q 0 1 0
@@ -90,13 +116,13 @@ main = do
   initialDisplayMode $= [DoubleBuffered, RGBMode, WithDepthBuffer]
 
   _ <- createWindow "Spinning cube"
-  angle <- newIORef 0.0
-  lights <- newIORef True
-  fill <- newIORef True
-  displayCallback $= display lights angle fill
+  ps <- newIORef defaultState
+  displayCallback $= display ps
   idleCallback $= Just idle
-  keyboardMouseCallback $= Just (keyboardMouse lights fill)
+  keyboardMouseCallback $= Just (keyboardMouse ps)
   reshapeCallback $= Just reshape
+  motionCallback $= Just motion
+  mouseWheelCallback $= Just wheel
   depthFunc $= Just Lequal
   matrixMode $= Projection
   perspective 40.0 1.0 1.0 10.0
@@ -170,14 +196,18 @@ initLight = do
 
 
 idle :: IdleCallback
-idle = do
-  postRedisplay Nothing
+idle = postRedisplay Nothing
 
+motion :: MotionCallback
+motion = print
 
-keyboardMouse :: IORef Bool -> IORef Bool -> KeyboardMouseCallback
-keyboardMouse lights fill key Down _ _ = case key of
+wheel :: MouseWheelCallback
+wheel _ direction pos = print direction >> print pos
+
+keyboardMouse :: IORef ProgramState -> KeyboardMouseCallback
+keyboardMouse ps key Down _ _ = case key of
   Char 'q' -> exitSuccess
-  Char 'f'-> fill $~! not
-  Char 'l' -> lights $~! not
-  _ -> return ()
-keyboardMouse _ _ _ _ _ _ = return ()
+  Char 'f'-> get ps >>= \p -> ps $=! p { fillState = not $ fillState  p }
+  Char 'l' -> get ps >>= \p -> ps $=! p { lightState = not $ lightState p }
+  _ -> print "Mouse down"
+keyboardMouse _ _ Up _ _ = print "Mouse up"
