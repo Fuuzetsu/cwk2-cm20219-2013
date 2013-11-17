@@ -121,7 +121,7 @@ main = do
   idleCallback $= Just idle
   keyboardMouseCallback $= Just (keyboardMouse ps)
   reshapeCallback $= Just reshape
-  motionCallback $= Just motion
+  motionCallback $= Just (motion ps)
   mouseWheelCallback $= Just wheel
   depthFunc $= Just Lequal
   matrixMode $= Projection
@@ -198,8 +198,10 @@ initLight = do
 idle :: IdleCallback
 idle = postRedisplay Nothing
 
-motion :: MotionCallback
-motion = print
+motion :: IORef ProgramState -> MotionCallback
+motion ps pos = do
+  programState <- get ps
+  return ()
 
 wheel :: MouseWheelCallback
 wheel _ direction pos = print direction >> print pos
@@ -209,5 +211,21 @@ keyboardMouse ps key Down _ _ = case key of
   Char 'q' -> exitSuccess
   Char 'f'-> get ps >>= \p -> ps $=! p { fillState = not $ fillState  p }
   Char 'l' -> get ps >>= \p -> ps $=! p { lightState = not $ lightState p }
+  MouseButton LeftButton -> setLeftButton ps Down
+  MouseButton RightButton -> setRightButton ps Down
   _ -> print "Mouse down"
+
 keyboardMouse _ _ Up _ _ = print "Mouse up"
+
+
+setLeftButton :: IORef ProgramState -> KeyState -> IO ()
+setLeftButton ps s = do
+  p <- get ps
+  let MouseState _ right = mouseState p
+  ps $=! p { mouseState = MouseState s right }
+
+setRightButton :: IORef ProgramState -> KeyState -> IO ()
+setRightButton ps s = do
+  p <- get ps
+  let MouseState left _ = mouseState p
+  ps $=! p { mouseState = MouseState left s }
