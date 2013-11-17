@@ -13,25 +13,36 @@ data ProgramState = ProgramState { cameraRotation :: CameraRotation
                                  , lightState :: LightState
                                  , fillState :: FillState
                                  , angleState :: GLfloat
+                                 , dragState :: (MouseState, Maybe Position)
+                                 , extraInfo :: [String]
                                  }
 
 defaultState :: ProgramState
 defaultState = ProgramState
-  { cameraRotation = CameraRotation 0.0 0.0 0.0
-  , mouseState = MouseState Up Up
+  { cameraRotation = CameraRotation 10.0 0.0 0.0
+  , mouseState = MouseState Up Up Up
   , lightState = True
   , fillState = True
   , angleState = 0.0
+  , dragState = (MouseState Up Up Up, Nothing)
+  , extraInfo = []
   }
+
+ctvf :: CameraRotation -> Vertex3 GLdouble
+ctvf (CameraRotation x y z) = Vertex3 x y z
+
+ctvd :: CameraRotation -> Vertex3 GLfloat
+ctvd (CameraRotation x y z) = Vertex3 (realToFrac x) (realToFrac y) (realToFrac z)
 
 type LightState = Bool
 type FillState = Bool
 
 data MouseState = MouseState { leftButton :: KeyState
                              , rightButton :: KeyState
-                             }
+                             , middleButton :: KeyState
+                             } deriving (Eq, Show)
 
-data CameraRotation = CameraRotation GLfloat GLfloat GLfloat
+data CameraRotation = CameraRotation GLdouble GLdouble GLdouble
                       deriving (Eq, Show)
 
 cube :: GLfloat -> IO ()
@@ -63,17 +74,47 @@ display ps = do
   let l = lightState programState
       a = angleState programState
       f = fillState programState
+      c = cameraRotation programState
   clear [ColorBuffer, DepthBuffer]
+
   loadIdentity
+  preservingMatrix (renderInfo programState)
   light (Light 0) $= if' l Enabled Disabled
-  lookAt (Vertex3 5.0 5.0 5.0) (Vertex3 0.0 0.0 0.0) (Vector3 0.0 1.0 0.0)
-  rotate (xangle + a) $ Vector3 1.0 0.0 0.0
+  let CameraRotation x' y' z' = c
+      Vertex3 dx dy dz = ctvd c
+  lookAt (ctvf c) (Vertex3 0.0 0.0 0.0) (Vector3 0.0 1.0 0.0)
+  rotate (xangle) $ Vector3 1.0 0.0 0.0
   rotate (yangle + a) $ Vector3 0.0 1.0 0.0
-  rotate zangle $ Vector3 0.0 0.0 1.0
-  ps $=! programState { angleState = angleState programState + 1 }
+  rotate (zangle) $ Vector3 0.0 0.0 1.0
+  ps $=! programState { angleState = angleState programState + 1.0 }
 
   drawCube f
+
   swapBuffers
+
+renderInfo :: ProgramState -> IO ()
+renderInfo p = do
+  let info = [ show $ mouseState p
+             , show $ cameraRotation p
+             ] ++ extraInfo p
+
+  c <- get currentColor
+
+  matrixMode $= Projection
+  preservingMatrix $ do
+
+    loadIdentity
+    Size x y <- get windowSize
+    ortho2D 0.0 (fromIntegral x) 0.0 (fromIntegral y)
+
+    matrixMode $= Modelview 0
+    preservingMatrix $ do
+      color $ Color3 1.0 0.0 (0.0 :: GLfloat)
+      let positions = [ Vertex2 22 (x :: GLint) | x <- [22, 44 .. ] ]
+          r = zip positions (reverse info)
+      mapM_ (\(p', t) -> rasterPos p' >> renderString Helvetica18 t) r
+
+  color c
 
 drawFace :: Bool -> GLfloat -> IO ()
 drawFace filled s =
@@ -199,9 +240,29 @@ idle :: IdleCallback
 idle = postRedisplay Nothing
 
 motion :: IORef ProgramState -> MotionCallback
-motion ps pos = do
+motion ps p@(Position newX newY) = do
   programState <- get ps
-  return ()
+  let nowMS = mouseState programState
+      (oldMS, oldPos) = dragState programState
+
+  case oldPos of
+    Nothing -> ps $=! programState { dragState = (nowMS, Just p) }
+    Just (Position oldX oldY) ->
+      if oldMS == nowMS
+      then do
+        let (dx, dy) = (fromIntegral (newX - oldX) / 100, fromIntegral (newY - oldY) / 100)
+            CameraRotation xc yc zc = cameraRotation programState
+            newCR = case mouseState programState of
+              MouseState Down _ _ -> CameraRotation xc yc zc
+      --        MouseState _ Down _ -> CameraRotation xc (yc + 2) zc
+              MouseState _ _ _ -> cameraRotation programState
+
+        ps $=! programState { dragState = (nowMS, Just p) }
+        ps $=! programState { cameraRotation = newCR }
+
+
+      else ps $=! programState { dragState = (nowMS, Just p) }
+
 
 wheel :: MouseWheelCallback
 wheel _ direction pos = print direction >> print pos
@@ -211,21 +272,45 @@ keyboardMouse ps key Down _ _ = case key of
   Char 'q' -> exitSuccess
   Char 'f'-> get ps >>= \p -> ps $=! p { fillState = not $ fillState  p }
   Char 'l' -> get ps >>= \p -> ps $=! p { lightState = not $ lightState p }
+  Char 'r' -> get ps >>= \p -> ps $=! p { cameraRotation = CameraRotation 0 0 0 }
+  Char 'x' -> do
+    p <- get ps
+    let CameraRotation x y z = cameraRotation p
+    ps $=! p { cameraRotation = CameraRotation (x + 1) y z }
+  Char 'y' -> do
+    p <- get ps
+    let CameraRotation x y z = cameraRotation p
+    ps $=! p { cameraRotation = CameraRotation (x) (y + 1) z }
+  Char 'z' -> do
+    p <- get ps
+    let CameraRotation x y z = cameraRotation p
+    ps $=! p { cameraRotation = CameraRotation x y (z + 1) }
   MouseButton LeftButton -> setLeftButton ps Down
   MouseButton RightButton -> setRightButton ps Down
+  MouseButton MiddleButton -> setMiddleButton ps Down
   _ -> print "Mouse down"
 
-keyboardMouse _ _ Up _ _ = print "Mouse up"
+keyboardMouse ps key Up _ _ = case key of
+  MouseButton LeftButton -> setLeftButton ps Up
+  MouseButton RightButton -> setRightButton ps Up
+  MouseButton MiddleButton -> setMiddleButton ps Up
+  _ -> print "Mouse up"
 
 
 setLeftButton :: IORef ProgramState -> KeyState -> IO ()
 setLeftButton ps s = do
   p <- get ps
-  let MouseState _ right = mouseState p
-  ps $=! p { mouseState = MouseState s right }
+  let MouseState _ right mid = mouseState p
+  ps $=! p { mouseState = MouseState s right mid }
 
 setRightButton :: IORef ProgramState -> KeyState -> IO ()
 setRightButton ps s = do
   p <- get ps
-  let MouseState left _ = mouseState p
-  ps $=! p { mouseState = MouseState left s }
+  let MouseState left _ mid = mouseState p
+  ps $=! p { mouseState = MouseState left s mid }
+
+setMiddleButton :: IORef ProgramState -> KeyState -> IO ()
+setMiddleButton ps s = do
+  p <- get ps
+  let MouseState left right _ = mouseState p
+  ps $=! p { mouseState = MouseState left right s }
