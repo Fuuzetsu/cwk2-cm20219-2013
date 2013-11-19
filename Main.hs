@@ -1,5 +1,7 @@
+{-# LANGUAGE TemplateHaskell #-}
 module Main where
 
+import Control.Lens
 import Graphics.Rendering.OpenGL
 import Graphics.UI.GLUT
 import Data.IORef
@@ -8,33 +10,6 @@ import System.Exit
 vertex3f :: (GLfloat, GLfloat, GLfloat) -> IO ()
 vertex3f (x, y, z) = vertex $ Vertex3 x y z
 
-data ProgramState = ProgramState { cameraRotation :: CameraRotation
-                                 , mouseState :: MouseState
-                                 , lightState :: LightState
-                                 , fillState :: FillState
-                                 , angleState :: GLfloat
-                                 , dragState :: (MouseState, Maybe Position)
-                                 , extraInfo :: [String]
-                                 , radiusState :: GLdouble
-                                 }
-
-defaultState :: ProgramState
-defaultState = ProgramState
-  { cameraRotation = CameraRotation 10.0 0.0 0.0
-  , mouseState = MouseState Up Up Up
-  , lightState = True
-  , fillState = True
-  , angleState = 0.0
-  , dragState = (MouseState Up Up Up, Nothing)
-  , extraInfo = []
-  , radiusState = 10.0
-  }
-
-ctvf :: CameraRotation -> Vertex3 GLdouble
-ctvf (CameraRotation x y z) = Vertex3 x y z
-
-ctvd :: CameraRotation -> Vertex3 GLfloat
-ctvd (CameraRotation x y z) = Vertex3 (realToFrac x) (realToFrac y) (realToFrac z)
 
 type LightState = Bool
 type FillState = Bool
@@ -46,6 +21,36 @@ data MouseState = MouseState { leftButton :: KeyState
 
 data CameraRotation = CameraRotation GLdouble GLdouble GLdouble
                       deriving (Eq, Show)
+
+
+data ProgramState = ProgramState { _cameraRotation :: CameraRotation
+                                 , _mouseState :: MouseState
+                                 , _lightState :: LightState
+                                 , _fillState :: FillState
+                                 , _angleState :: GLfloat
+                                 , _dragState :: (MouseState, Maybe Position)
+                                 , _extraInfo :: [String]
+                                 , _radiusState :: GLdouble
+                                 }
+makeLenses ''ProgramState
+
+defaultState :: ProgramState
+defaultState = ProgramState
+  { _cameraRotation = CameraRotation 10.0 0.0 0.0
+  , _mouseState = MouseState Up Up Up
+  , _lightState = True
+  , _fillState = True
+  , _angleState = 0.0
+  , _dragState = (MouseState Up Up Up, Nothing)
+  , _extraInfo = []
+  , _radiusState = 10.0
+  }
+
+ctvf :: CameraRotation -> Vertex3 GLdouble
+ctvf (CameraRotation x y z) = Vertex3 x y z
+
+ctvd :: CameraRotation -> Vertex3 GLfloat
+ctvd (CameraRotation x y z) = Vertex3 (realToFrac x) (realToFrac y) (realToFrac z)
 
 cube :: GLfloat -> IO ()
 cube w = renderPrimitive Quads $ mapM_ vertex3f
@@ -73,10 +78,10 @@ zangle = 0.0
 display :: IORef ProgramState -> DisplayCallback
 display ps = do
   programState <- get ps
-  let l = lightState programState
-      a = angleState programState
-      f = fillState programState
-      c = cameraRotation programState
+  let l = view lightState programState
+      a = view angleState programState
+      f = view fillState programState
+      c = view cameraRotation programState
   clear [ColorBuffer, DepthBuffer]
 
   loadIdentity
@@ -86,7 +91,7 @@ display ps = do
   rotate (xangle) $ Vector3 1.0 0.0 0.0
   rotate (yangle) $ Vector3 0.0 1.0 0.0
   rotate (zangle) $ Vector3 0.0 0.0 1.0
-  ps $=! programState { angleState = angleState programState + 1.0 }
+  ps $=! programState { _angleState = _angleState programState + 1.0 }
 
   drawCube f
 
@@ -94,9 +99,9 @@ display ps = do
 
 renderInfo :: ProgramState -> IO ()
 renderInfo p = do
-  let info = [ show $ mouseState p
-             , show $ cameraRotation p
-             ] ++ extraInfo p
+  let info = [ show $ p ^. mouseState
+             , show $ p ^. cameraRotation
+             ] ++ p ^. extraInfo
 
   c <- get currentColor
 
@@ -241,84 +246,84 @@ idle = postRedisplay Nothing
 motion :: IORef ProgramState -> MotionCallback
 motion ps p@(Position newX newY) = do
   programState <- get ps
-  let nowMS = mouseState programState
-      (oldMS, oldPos) = dragState programState
+  let nowMS = programState ^. mouseState
+      (oldMS, oldPos) = programState ^. dragState
 
   case oldPos of
-    Nothing -> ps $=! programState { dragState = (nowMS, Just p) }
+    Nothing -> ps $=! (dragState .~ (nowMS, Just p) $ programState)
     Just (Position oldX oldY) ->
       if oldMS == nowMS
       then do
         let theta = (fromIntegral $ newX - oldX) * 0.005
             phi = (fromIntegral $ newY - oldY) * 0.005
-            radius = radiusState programState
+            radius = programState ^. radiusState
             eyeX = -(radius * (cos phi) * (sin theta))
             eyeY = -(radius * sin phi * sin theta)
             eyeZ = radius * cos theta
-            CameraRotation xc yc zc = cameraRotation programState
-            newCR = case mouseState programState of
+            CameraRotation xc yc zc = programState ^. cameraRotation
+            newCR = case programState ^. mouseState of
               MouseState Down _ _ -> CameraRotation eyeX eyeY eyeZ
       --        MouseState _ Down _ -> CameraRotation xc (yc + 2) zc
-              MouseState _ _ _ -> cameraRotation programState
+              MouseState _ _ _ -> programState ^. cameraRotation
 
-        ps $=! programState { dragState = (nowMS, Just p) }
-        ps $=! programState { cameraRotation = newCR }
+        ps $=! (dragState .~ (nowMS, Just p) $ programState)
+        ps $=! (cameraRotation .~ newCR $ programState)
 
 
-      else ps $=! programState { dragState = (nowMS, Just p) }
+      else ps $=! (dragState .~ (nowMS, Just p) $ programState)
 
 
 keyboardMouse :: IORef ProgramState -> KeyboardMouseCallback
 keyboardMouse ps key Down _ _ = case key of
   Char 'q' -> exitSuccess
-  Char 'f'-> get ps >>= \p -> ps $=! p { fillState = not $ fillState  p }
-  Char 'l' -> get ps >>= \p -> ps $=! p { lightState = not $ lightState p }
-  Char 'r' -> get ps >>= \p -> ps $=! p { cameraRotation = CameraRotation 0 0 0 }
+  Char 'f'-> get ps >>= \p -> ps $=! p { _fillState = not $ _fillState  p }
+  Char 'l' -> get ps >>= \p -> ps $=! p { _lightState = not $ _lightState p }
+  Char 'r' -> get ps >>= \p -> ps $=! p { _cameraRotation = CameraRotation 0 0 0 }
   Char 'x' -> do
     p <- get ps
-    let CameraRotation x y z = cameraRotation p
-    ps $=! p { cameraRotation = CameraRotation (x + 1) y z }
+    let CameraRotation x y z = p ^. cameraRotation
+    ps $=! p { _cameraRotation = CameraRotation (x + 1) y z }
   Char 'y' -> do
     p <- get ps
-    let CameraRotation x y z = cameraRotation p
-    ps $=! p { cameraRotation = CameraRotation (x) (y + 1) z }
+    let CameraRotation x y z = p ^. cameraRotation
+    ps $=! p { _cameraRotation = CameraRotation (x) (y + 1) z }
   Char 'z' -> do
     p <- get ps
-    let CameraRotation x y z = cameraRotation p
-    ps $=! p { cameraRotation = CameraRotation x y (z + 1) }
+    let CameraRotation x y z = p ^. cameraRotation
+    ps $=! p { _cameraRotation = CameraRotation x y (z + 1) }
   MouseButton LeftButton -> setLeftButton ps Down >> resetDrag ps
   MouseButton RightButton -> setRightButton ps Down >> resetDrag ps
   MouseButton MiddleButton -> setMiddleButton ps Down >> resetDrag ps
-  MouseButton WheelDown -> get ps >>= \p -> ps $=! p { radiusState = radiusState p - 1.0 }
+  MouseButton WheelDown -> get ps >>= \p -> ps $=! p { _radiusState = _radiusState p - 1.0 }
   _ -> print "Mouse down"
 
 keyboardMouse ps key Up _ _ = case key of
   MouseButton LeftButton -> setLeftButton ps Up
   MouseButton RightButton -> setRightButton ps Up
   MouseButton MiddleButton -> setMiddleButton ps Up
-  MouseButton WheelUp -> get ps >>= \p -> ps $=! p { radiusState = radiusState p + 1.0 }
+  MouseButton WheelUp -> get ps >>= \p -> ps $=! p { _radiusState = _radiusState p + 1.0 }
   _ -> print "Mouse up"
 
 resetDrag :: IORef ProgramState -> IO ()
 resetDrag ps = do
   p <- get ps
-  let (m, _) = dragState p
-  ps $=! p { dragState = (m, Nothing) }
+  let (m, _) = _dragState p
+  ps $=! p { _dragState = (m, Nothing) }
 
 setLeftButton :: IORef ProgramState -> KeyState -> IO ()
 setLeftButton ps s = do
   p <- get ps
-  let MouseState _ right mid = mouseState p
-  ps $=! p { mouseState = MouseState s right mid }
+  let MouseState _ right mid = p ^. mouseState
+  ps $=! p { _mouseState = MouseState s right mid }
 
 setRightButton :: IORef ProgramState -> KeyState -> IO ()
 setRightButton ps s = do
   p <- get ps
-  let MouseState left _ mid = mouseState p
-  ps $=! p { mouseState = MouseState left s mid }
+  let MouseState left _ mid = p ^. mouseState
+  ps $=! p { _mouseState = MouseState left s mid }
 
 setMiddleButton :: IORef ProgramState -> KeyState -> IO ()
 setMiddleButton ps s = do
   p <- get ps
-  let MouseState left right _ = mouseState p
-  ps $=! p { mouseState = MouseState left right s }
+  let MouseState left right _ = p ^. mouseState
+  ps $=! p { _mouseState = MouseState left right s }
