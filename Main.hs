@@ -19,37 +19,57 @@ data MouseState = MouseState { _leftButton :: KeyState
                              , _middleButton :: KeyState
                              } deriving (Eq, Show)
 
-data CameraRotation = CameraRotation { _cX :: GLdouble
+data CameraPosition = CameraPosition { _cX :: GLdouble
                                      , _cY :: GLdouble
                                      , _cZ :: GLdouble
                                      }
                       deriving (Eq, Show)
 
+data Flag = Info | ExtraInfo | CameraInfo | Flags
+          | DragInfo | MouseInfo | Fill | Help
+          deriving (Show, Eq)
 
-data ProgramState = ProgramState { _cameraRotation :: CameraRotation
+data ProgramState = ProgramState { _cameraPosition :: CameraPosition
                                  , _mouseState :: MouseState
                                  , _lightState :: LightState
-                                 , _fillState :: FillState
                                  , _angleState :: GLfloat
                                  , _dragState :: (MouseState, Maybe Position)
                                  , _extraInfo :: [String]
-                                 , _radiusState :: GLdouble
+                                 , _flags :: [Flag]
                                  }
 makeLenses ''MouseState
 makeLenses ''ProgramState
-makeLenses ''CameraRotation
+makeLenses ''CameraPosition
 
+addFlag :: IORef ProgramState -> Flag -> IO ()
+addFlag ps f = do
+  p <- get ps
+  ps $$! p & flags %~ (\fl -> if f `elem` fl then fl else f : fl)
+
+clearFlag :: IORef ProgramState -> Flag -> IO ()
+clearFlag ps f = get ps >>= \p -> ps $$! p & flags %~ filter (/= f)
+
+toggleFlag :: IORef ProgramState -> Flag -> IO ()
+toggleFlag ps f = do
+  p <- get ps
+  if f `elem` p ^. flags then clearFlag ps f else addFlag ps f
+
+(++?) :: [a] -> [a] -> [a]
+x ++? y
+  | length x >= 20 = tail x ++ y
+  | otherwise = x ++ y
 
 defaultState :: ProgramState
 defaultState = ProgramState
-  { _cameraRotation = CameraRotation 10.0 0.0 0.0
+  { _cameraPosition = CameraPosition 0.0 0.0 10.0
   , _mouseState = MouseState Up Up Up
   , _lightState = True
-  , _fillState = True
   , _angleState = 0.0
   , _dragState = (MouseState Up Up Up, Nothing)
   , _extraInfo = []
-  , _radiusState = 10.0
+  , _flags = [ Main.Info, ExtraInfo, CameraInfo, Flags
+             , Main.Fill, DragInfo, MouseInfo
+             ]
   }
 
 -- Remind $=! with to with 0 left fixity to drop some parens
@@ -58,11 +78,11 @@ defaultState = ProgramState
 infixl 0 $$!
 
 
-ctvf :: CameraRotation -> Vertex3 GLdouble
-ctvf (CameraRotation x y z) = Vertex3 x y z
+ctvf :: CameraPosition -> Vertex3 GLdouble
+ctvf (CameraPosition x y z) = Vertex3 x y z
 
-ctvd :: CameraRotation -> Vertex3 GLfloat
-ctvd (CameraRotation x y z) = Vertex3 (realToFrac x) (realToFrac y) (realToFrac z)
+ctvd :: CameraPosition -> Vertex3 GLfloat
+ctvd (CameraPosition x y z) = Vertex3 (realToFrac x) (realToFrac y) (realToFrac z)
 
 cube :: GLfloat -> IO ()
 cube w = renderPrimitive Quads $ mapM_ vertex3f
@@ -92,46 +112,106 @@ display ps = do
   programState <- get ps
   let l = programState ^. lightState
       a = programState ^. angleState
-      f = programState ^. fillState
-      c = programState ^. cameraRotation
+      f = Main.Fill `elem` programState ^. flags
+      c = programState ^. cameraPosition
+      Vertex3 x y z = ctvd $ c
   clear [ColorBuffer, DepthBuffer]
+
+  preservingMatrix drawAxis
 
   loadIdentity
   preservingMatrix (renderInfo programState)
   light (Light 0) $= if' l Enabled Disabled
   lookAt (ctvf c) (Vertex3 0.0 0.0 0.0) (Vector3 0.0 1.0 0.0)
-  rotate (xangle) $ Vector3 1.0 0.0 0.0
-  rotate (yangle) $ Vector3 0.0 1.0 0.0
-  rotate (zangle) $ Vector3 0.0 0.0 1.0
-  ps $$! programState & angleState %~ (+ 1.0)
+  -- rotate xangle $ Vector3 1.0 0.0 0.0
+  -- rotate yangle $ Vector3 0.0 1.0 0.0
+  -- rotate zangle $ Vector3 0.0 0.0 1.0
+  -- ps $$! programState & angleState %~ (+ 1.0)
 
-  drawCube f
+  preservingMatrix (drawCube f)
 
   swapBuffers
 
-renderInfo :: ProgramState -> IO ()
-renderInfo p = do
-  let info = [ p ^. mouseState ^. to show
-             , p ^. cameraRotation ^. to show
-             ] ++ p ^. extraInfo
-
+drawAxis :: IO ()
+drawAxis = do
   c <- get currentColor
-
-  matrixMode $= Projection
   preservingMatrix $ do
+    -- X
+    color $ Color3 1.0 0.0 (0.0 :: GLfloat)
 
-    loadIdentity
-    Size x y <- get windowSize
-    ortho2D 0.0 (fromIntegral x) 0.0 (fromIntegral y)
+    renderPrimitive Lines $ mapM_ vertex3f
+      [ (0.0, 0.0, 0.0)
+      , (10.0, 0.0, 0.0)
+      ]
 
-    matrixMode $= Modelview 0
-    preservingMatrix $ do
-      color $ Color3 1.0 0.0 (0.0 :: GLfloat)
-      let positions = [ Vertex2 22 (x :: GLint) | x <- [22, 44 .. ] ]
-          r = zip positions (reverse info)
-      mapM_ (\(p', t) -> rasterPos p' >> renderString Helvetica18 t) r
+    -- Y
+    color $ Color3 0.0 1.0 (0.0 :: GLfloat)
+
+    renderPrimitive Lines $ mapM_ vertex3f
+      [ (0.0, 0.0, 0.0)
+      , (0.0, 10.0, 0.0)
+      ]
+
+    -- Z
+    color $ Color3 0.0 0.0 (1.0 :: GLfloat)
+
+    renderPrimitive Lines $ mapM_ vertex3f
+      [ (0.0, 0.0, 0.0)
+      , (0.0, 0.0, 10.0)
+      ]
 
   color c
+
+renderInfo :: ProgramState -> IO ()
+renderInfo p = do
+
+  let helpText =
+        [ "Char 'q' -> exitSuccess"
+        , "Char 'f'-> toggleFlag ps Main.Fill"
+        , "Char 'l' -> get ps >>= \\p -> ps $$! p & lightState %~ not"
+        , "Char 'r' -> get ps >>= \\p -> ps $$! p & cameraPosition .~ defaultState ^. cameraPosition"
+        , "Char 'x' -> onCoord cX succ"
+        , "Char 'y' -> onCoord cY succ"
+        , "Char 'z' -> onCoord cZ succ"
+        , "Char 'X' -> onCoord cX pred"
+        , "Char 'Y' -> onCoord cY pred"
+        , "Char 'Z' -> onCoord cZ pred"
+        , "Char 's' -> toggleFlag ps Flags"
+        , "Char 'i' -> toggleFlag ps Main.Info"
+        , "Char 'c' -> toggleFlag ps CameraInfo"
+        , "Char 'e' -> toggleFlag ps ExtraInfo"
+        , "Char 'd' -> toggleFlag ps DragInfo"
+        , "Char 'm' -> toggleFlag ps MouseInfo"
+        , "Char 'h' -> toggleFlag ps Main.Help"
+        ]
+
+
+  let h f g = if f `elem` p ^. flags then [p ^. g ^. to show] else []
+      info = (if ExtraInfo `elem` p ^. flags then p ^. extraInfo else [])
+             ++ h MouseInfo mouseState ++ h CameraInfo cameraPosition
+             ++ h DragInfo dragState ++ h Flags flags
+      info' = if Main.Help `elem` p ^. flags then helpText else info
+
+  if Main.Info `elem` p ^. flags
+    then do
+      c <- get currentColor
+
+      matrixMode $= Projection
+      preservingMatrix $ do
+
+        loadIdentity
+        Size x y <- get windowSize
+        ortho2D 0.0 (fromIntegral x) 0.0 (fromIntegral y)
+
+        matrixMode $= Modelview 0
+        preservingMatrix $ do
+          color $ Color3 1.0 0.0 (0.0 :: GLfloat)
+          let positions = [ Vertex2 22 (x :: GLint) | x <- [22, 44 .. ] ]
+              r = zip positions (reverse info')
+          mapM_ (\(p', t) -> rasterPos p' >> renderString Helvetica18 t) r
+
+      color c
+    else return ()
 
 drawFace :: Bool -> GLfloat -> IO ()
 drawFace filled s =
@@ -214,7 +294,8 @@ initGL = do
 
   shadeModel $= Smooth
 
-  clearColor $= Color4 0.5 1.0 0.75 0.0
+  -- clearColor $= Color4 0.5 1.0 0.75 0.0
+  clearColor $= Color4 0.0 0.0 0.0 0.0
   cullFace $= Just Back
   hint PerspectiveCorrection $= Nicest
 
@@ -252,6 +333,12 @@ initLight = do
   light l $= Enabled
 
 
+writeLog :: Show a => IORef ProgramState -> a -> IO ()
+writeLog ps s = get ps >>= \p -> ps $$! p & extraInfo %~ (++? [show s])
+
+clearLog :: IORef ProgramState -> IO ()
+clearLog ps = get ps >>= \p -> ps $$! p & extraInfo .~ []
+
 idle :: IdleCallback
 idle = postRedisplay Nothing
 
@@ -266,50 +353,68 @@ motion ps p@(Position newX newY) = do
     Just (Position oldX oldY) ->
       if oldMS == nowMS
       then do
-        let theta = (fromIntegral $ newX - oldX) * 0.005
+        let xCh = fromIntegral $ newX - oldX
+
+            theta = (fromIntegral $ newX - oldX) * 0.005
             phi = (fromIntegral $ newY - oldY) * 0.005
-            radius = pState ^. radiusState
+
+            radius = defaultState ^. cameraPosition . cZ
+
             eyeX = -(radius * (cos phi) * (sin theta))
             eyeY = -(radius * sin phi * sin theta)
             eyeZ = radius * cos theta
-            CameraRotation xc yc zc = pState ^. cameraRotation
+            CameraPosition xc yc zc = pState ^. cameraPosition
             newCR = case pState ^. mouseState of
-              MouseState Down _ _ -> CameraRotation eyeX eyeY eyeZ
-      --        MouseState _ Down _ -> CameraRotation xc (yc + 2) zc
-              MouseState _ _ _ -> pState ^. cameraRotation
+              -- MouseState Down _ _ -> CameraPosition (xc + xCh) yc zc
+              MouseState Down _ _ -> CameraPosition eyeX eyeY zc
+      --        MouseState _ Down _ -> CameraPosition xc (yc + 2) zc
+              MouseState _ _ _ -> pState ^. cameraPosition
 
-        ps $$! pState & dragState .~ (nowMS, Just p) & cameraRotation .~ newCR
+        ps $$! pState & dragState .~ (nowMS, Just p) & cameraPosition .~ newCR
+        writeLog ps p
 
-      else ps $$! pState & dragState .~ (nowMS, Just p)
+      else do ps $$! pState & dragState .~ (nowMS, Just p)
+              writeLog ps p
 
 
 keyboardMouse :: IORef ProgramState -> KeyboardMouseCallback
 keyboardMouse ps key Down _ _ = case key of
   Char 'q' -> exitSuccess
-  Char 'f'-> get ps >>= \p -> ps $$! p & fillState %~ not
+  Char 'f'-> toggleFlag ps Main.Fill
   Char 'l' -> get ps >>= \p -> ps $$! p & lightState %~ not
-  Char 'r' -> get ps >>= \p -> ps $$! p & cameraRotation .~ CameraRotation 0 0 0
+  Char 'r' -> get ps >>= \p -> ps $$! p & cameraPosition .~ defaultState ^. cameraPosition
   Char 'x' -> onCoord cX succ
   Char 'y' -> onCoord cY succ
   Char 'z' -> onCoord cZ succ
+  Char 'X' -> onCoord cX pred
+  Char 'Y' -> onCoord cY pred
+  Char 'Z' -> onCoord cZ pred
+  Char 's' -> toggleFlag ps Flags
+  Char 'i' -> toggleFlag ps Main.Info
+  Char 'c' -> toggleFlag ps CameraInfo
+  Char 'e' -> toggleFlag ps ExtraInfo
+  Char 'd' -> toggleFlag ps DragInfo
+  Char 'm' -> toggleFlag ps MouseInfo
+  Char 'h' -> toggleFlag ps Main.Help
 
   MouseButton LeftButton -> setB leftButton
   MouseButton RightButton -> setB rightButton
   MouseButton MiddleButton -> setB middleButton
-  MouseButton WheelDown -> get ps >>= \p -> ps $$! p & radiusState %~ pred
+--  MouseButton WheelDown -> get ps >>= \p -> ps $$! p & cameraPosition %~ flip camMap succ
   _ -> print "Mouse down"
   where
     setB f = do
       p <- get ps
       ps $$! p & mouseState . f .~ Down & dragState . _2 .~ Nothing
+      clearLog ps
 
-    onCoord f g = get ps >>= \p -> ps $$! p & cameraRotation . f %~ g
+    onCoord f g = get ps >>= \p -> ps $$! p & cameraPosition . f %~ g
 
 keyboardMouse ps key Up _ _ = case key of
-  MouseButton LeftButton -> setB leftButton
+  MouseButton LeftButton -> setB leftButton >> clearLog ps
   MouseButton RightButton -> setB rightButton
   MouseButton MiddleButton -> setB middleButton
-  MouseButton WheelUp -> get ps >>= \p -> ps $$! p & radiusState %~ succ
+--  MouseButton WheelUp -> get ps >>= \p -> ps $$! p & cameraPosition %~ flip camMap pred
   _ -> print "Mouse up"
   where
     setB f = get ps >>= \p -> ps $$! p & mouseState . f .~ Up
