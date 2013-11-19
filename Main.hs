@@ -1,14 +1,25 @@
-{-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE TemplateHaskell, FlexibleInstances, MultiParamTypeClasses #-}
 module Main where
+
 
 import Control.Lens
 import Graphics.Rendering.OpenGL
 import Graphics.UI.GLUT
+import Data.Fixed
 import Data.IORef
 import System.Exit
 
 vertex3f :: (GLfloat, GLfloat, GLfloat) -> IO ()
 vertex3f (x, y, z) = vertex $ Vertex3 x y z
+
+instance Field1 (Vertex3 a) (Vertex3 a) a a where
+  _1 k (Vertex3 x y z) = indexed k (0 :: Int) x <&> \x' -> Vertex3 x' y z
+
+instance Field2 (Vertex3 a) (Vertex3 a) a a where
+  _2 k (Vertex3 x y z) = indexed k (0 :: Int) y <&> \y' -> Vertex3 x y' z
+
+instance Field3 (Vertex3 a) (Vertex3 a) a a where
+  _3 k (Vertex3 x y z) = indexed k (0 :: Int) z <&> \z' -> Vertex3 x y z'
 
 
 type LightState = Bool
@@ -19,17 +30,17 @@ data MouseState = MouseState { _leftButton :: KeyState
                              , _middleButton :: KeyState
                              } deriving (Eq, Show)
 
-data CameraPosition = CameraPosition { _cX :: GLdouble
-                                     , _cY :: GLdouble
-                                     , _cZ :: GLdouble
-                                     }
+data CameraShift = CameraShift { _cX :: GLint
+                               , _cY :: GLint
+                               , _cZ :: GLint
+                               }
                       deriving (Eq, Show)
 
-data Flag = Info | ExtraInfo | CameraInfo | Flags
+data Flag = Info | ExtraInfo | CameraInfo | Flags | ShiftInfo
           | DragInfo | MouseInfo | Fill | Help
           deriving (Show, Eq)
 
-data ProgramState = ProgramState { _cameraPosition :: CameraPosition
+data ProgramState = ProgramState { _cameraShift :: CameraShift
                                  , _mouseState :: MouseState
                                  , _lightState :: LightState
                                  , _angleState :: GLfloat
@@ -39,7 +50,7 @@ data ProgramState = ProgramState { _cameraPosition :: CameraPosition
                                  }
 makeLenses ''MouseState
 makeLenses ''ProgramState
-makeLenses ''CameraPosition
+makeLenses ''CameraShift
 
 addFlag :: IORef ProgramState -> Flag -> IO ()
 addFlag ps f = do
@@ -61,14 +72,14 @@ x ++? y
 
 defaultState :: ProgramState
 defaultState = ProgramState
-  { _cameraPosition = CameraPosition 0.0 0.0 10.0
+  { _cameraShift = CameraShift 0 0 10
   , _mouseState = MouseState Up Up Up
   , _lightState = True
   , _angleState = 0.0
   , _dragState = (MouseState Up Up Up, Nothing)
   , _extraInfo = []
-  , _flags = [ Main.Info, ExtraInfo, CameraInfo, Flags
-             , Main.Fill, DragInfo, MouseInfo
+  , _flags = [ Main.Info, ExtraInfo, Flags
+             , Main.Fill, DragInfo, MouseInfo, ShiftInfo
              ]
   }
 
@@ -78,11 +89,8 @@ defaultState = ProgramState
 infixl 0 $$!
 
 
-ctvf :: CameraPosition -> Vertex3 GLdouble
-ctvf (CameraPosition x y z) = Vertex3 x y z
-
-ctvd :: CameraPosition -> Vertex3 GLfloat
-ctvd (CameraPosition x y z) = Vertex3 (realToFrac x) (realToFrac y) (realToFrac z)
+ctvf :: CameraShift -> Vertex3 GLdouble
+ctvf (CameraShift x y z) = Vertex3 (fromIntegral x) (fromIntegral y) (fromIntegral z)
 
 cube :: GLfloat -> IO ()
 cube w = renderPrimitive Quads $ mapM_ vertex3f
@@ -113,8 +121,9 @@ display ps = do
   let l = programState ^. lightState
       a = programState ^. angleState
       f = Main.Fill `elem` programState ^. flags
-      c = programState ^. cameraPosition
-      Vertex3 x y z = ctvd $ c
+      c = programState ^. cameraShift
+      CameraShift x' y' z' = programState ^. cameraShift
+      (x, y, z) = (fromIntegral x' / 10, fromIntegral y' / 10, fromIntegral z')
   clear [ColorBuffer, DepthBuffer]
 
   preservingMatrix drawAxis
@@ -122,10 +131,10 @@ display ps = do
   loadIdentity
   preservingMatrix (renderInfo programState)
   light (Light 0) $= if' l Enabled Disabled
-  lookAt (ctvf c) (Vertex3 0.0 0.0 0.0) (Vector3 0.0 1.0 0.0)
-  -- rotate xangle $ Vector3 1.0 0.0 0.0
-  -- rotate yangle $ Vector3 0.0 1.0 0.0
-  -- rotate zangle $ Vector3 0.0 0.0 1.0
+  lookAt (Vertex3 0.0 0.0 z) (Vertex3 0.0 0.0 0.0) (Vector3 0.0 1.0 0.0)
+  rotate (xangle + y) $ Vector3 1.0 0.0 0.0
+  rotate (yangle + x) $ Vector3 0.0 1.0 0.0
+--  rotate (zangle + fromIntegral z') $ Vector3 0.0 0.0 1.0
   -- ps $$! programState & angleState %~ (+ 1.0)
 
   preservingMatrix (drawCube f)
@@ -169,7 +178,7 @@ renderInfo p = do
         [ "Char 'q' -> exitSuccess"
         , "Char 'f'-> toggleFlag ps Main.Fill"
         , "Char 'l' -> get ps >>= \\p -> ps $$! p & lightState %~ not"
-        , "Char 'r' -> get ps >>= \\p -> ps $$! p & cameraPosition .~ defaultState ^. cameraPosition"
+        , "Char 'r' -> get ps >>= \\p -> ps $$! p & cameraShift .~ defaultState ^. cameraShift"
         , "Char 'x' -> onCoord cX succ"
         , "Char 'y' -> onCoord cY succ"
         , "Char 'z' -> onCoord cZ succ"
@@ -178,18 +187,18 @@ renderInfo p = do
         , "Char 'Z' -> onCoord cZ pred"
         , "Char 's' -> toggleFlag ps Flags"
         , "Char 'i' -> toggleFlag ps Main.Info"
-        , "Char 'c' -> toggleFlag ps CameraInfo"
         , "Char 'e' -> toggleFlag ps ExtraInfo"
         , "Char 'd' -> toggleFlag ps DragInfo"
         , "Char 'm' -> toggleFlag ps MouseInfo"
         , "Char 'h' -> toggleFlag ps Main.Help"
+        , "Char 's' -> toggleFlag ps ShiftInfo"
         ]
 
 
   let h f g = if f `elem` p ^. flags then [p ^. g ^. to show] else []
       info = (if ExtraInfo `elem` p ^. flags then p ^. extraInfo else [])
-             ++ h MouseInfo mouseState ++ h CameraInfo cameraPosition
-             ++ h DragInfo dragState ++ h Flags flags
+             ++ h MouseInfo mouseState ++ h DragInfo dragState
+             ++ h ShiftInfo cameraShift ++ h Flags flags
       info' = if Main.Help `elem` p ^. flags then helpText else info
 
   if Main.Info `elem` p ^. flags
@@ -353,24 +362,12 @@ motion ps p@(Position newX newY) = do
     Just (Position oldX oldY) ->
       if oldMS == nowMS
       then do
-        let xCh = fromIntegral $ newX - oldX
+        let CameraShift sx sy sz = pState ^. cameraShift
+            xDifference = newX - oldX + sx
+            yDifference = newY - oldY + sy
 
-            theta = (fromIntegral $ newX - oldX) * 0.005
-            phi = (fromIntegral $ newY - oldY) * 0.005
-
-            radius = defaultState ^. cameraPosition . cZ
-
-            eyeX = -(radius * (cos phi) * (sin theta))
-            eyeY = -(radius * sin phi * sin theta)
-            eyeZ = radius * cos theta
-            CameraPosition xc yc zc = pState ^. cameraPosition
-            newCR = case pState ^. mouseState of
-              -- MouseState Down _ _ -> CameraPosition (xc + xCh) yc zc
-              MouseState Down _ _ -> CameraPosition eyeX eyeY zc
-      --        MouseState _ Down _ -> CameraPosition xc (yc + 2) zc
-              MouseState _ _ _ -> pState ^. cameraPosition
-
-        ps $$! pState & dragState .~ (nowMS, Just p) & cameraPosition .~ newCR
+        let p' = pState & cameraShift .~ CameraShift xDifference yDifference sz
+        ps $$! p' &  dragState . _2 .~ Just p
         writeLog ps p
 
       else do ps $$! pState & dragState .~ (nowMS, Just p)
@@ -382,7 +379,7 @@ keyboardMouse ps key Down _ _ = case key of
   Char 'q' -> exitSuccess
   Char 'f'-> toggleFlag ps Main.Fill
   Char 'l' -> get ps >>= \p -> ps $$! p & lightState %~ not
-  Char 'r' -> get ps >>= \p -> ps $$! p & cameraPosition .~ defaultState ^. cameraPosition
+  Char 'r' -> get ps >>= \p -> ps $$! p & cameraShift .~ defaultState ^. cameraShift
   Char 'x' -> onCoord cX succ
   Char 'y' -> onCoord cY succ
   Char 'z' -> onCoord cZ succ
@@ -391,16 +388,16 @@ keyboardMouse ps key Down _ _ = case key of
   Char 'Z' -> onCoord cZ pred
   Char 's' -> toggleFlag ps Flags
   Char 'i' -> toggleFlag ps Main.Info
-  Char 'c' -> toggleFlag ps CameraInfo
   Char 'e' -> toggleFlag ps ExtraInfo
   Char 'd' -> toggleFlag ps DragInfo
   Char 'm' -> toggleFlag ps MouseInfo
   Char 'h' -> toggleFlag ps Main.Help
+  Char 't' -> toggleFlag ps ShiftInfo
 
   MouseButton LeftButton -> setB leftButton
   MouseButton RightButton -> setB rightButton
   MouseButton MiddleButton -> setB middleButton
---  MouseButton WheelDown -> get ps >>= \p -> ps $$! p & cameraPosition %~ flip camMap succ
+  MouseButton WheelDown -> get ps >>= \p -> ps $$! p & cameraShift . cZ %~ pred
   _ -> print "Mouse down"
   where
     setB f = do
@@ -408,13 +405,13 @@ keyboardMouse ps key Down _ _ = case key of
       ps $$! p & mouseState . f .~ Down & dragState . _2 .~ Nothing
       clearLog ps
 
-    onCoord f g = get ps >>= \p -> ps $$! p & cameraPosition . f %~ g
+    onCoord f g = get ps >>= \p -> ps $$! p & cameraShift . f %~ g
 
 keyboardMouse ps key Up _ _ = case key of
   MouseButton LeftButton -> setB leftButton >> clearLog ps
   MouseButton RightButton -> setB rightButton
   MouseButton MiddleButton -> setB middleButton
---  MouseButton WheelUp -> get ps >>= \p -> ps $$! p & cameraPosition %~ flip camMap pred
+  MouseButton WheelUp -> get ps >>= \p -> ps $$! p & cameraShift . cZ %~ succ
   _ -> print "Mouse up"
   where
     setB f = get ps >>= \p -> ps $$! p & mouseState . f .~ Up
