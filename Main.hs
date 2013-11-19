@@ -1,8 +1,11 @@
 {-# LANGUAGE TemplateHaskell, FlexibleInstances, MultiParamTypeClasses #-}
 module Main where
 
-
+import Control.Applicative
+import Control.Monad
 import Control.Lens
+import Data.List
+import Data.Time.Clock
 import Graphics.Rendering.OpenGL
 import Graphics.UI.GLUT
 import Data.Fixed
@@ -22,31 +25,28 @@ instance Field3 (Vertex3 a) (Vertex3 a) a a where
   _3 k (Vertex3 x y z) = indexed k (0 :: Int) z <&> \z' -> Vertex3 x y z'
 
 
-type LightState = Bool
-type FillState = Bool
-
 data MouseState = MouseState { _leftButton :: KeyState
                              , _rightButton :: KeyState
                              , _middleButton :: KeyState
                              } deriving (Eq, Show)
 
-data CameraShift = CameraShift { _cX :: GLint
-                               , _cY :: GLint
-                               , _cZ :: GLint
+data CameraShift = CameraShift { _cX :: GLdouble
+                               , _cY :: GLdouble
+                               , _cZ :: GLdouble
                                }
                       deriving (Eq, Show)
 
-data Flag = Info | ExtraInfo | CameraInfo | Flags | ShiftInfo
-          | DragInfo | MouseInfo | Fill | Help
+data Flag = Info | ExtraInfo | CameraInfo | Flags | ShiftInfo | Middle | Shapes
+          | DragInfo | MouseInfo | Fill | Help | Lights | FramesPerSecond
           deriving (Show, Eq)
 
 data ProgramState = ProgramState { _cameraShift :: CameraShift
                                  , _mouseState :: MouseState
-                                 , _lightState :: LightState
                                  , _angleState :: GLfloat
                                  , _dragState :: (MouseState, Maybe Position)
                                  , _extraInfo :: [String]
                                  , _flags :: [Flag]
+                                 , _timeState :: (DiffTime, Int, Int)
                                  }
 makeLenses ''MouseState
 makeLenses ''ProgramState
@@ -72,15 +72,16 @@ x ++? y
 
 defaultState :: ProgramState
 defaultState = ProgramState
-  { _cameraShift = CameraShift 0 0 10
+  { _cameraShift = CameraShift (-350) 350 40
   , _mouseState = MouseState Up Up Up
-  , _lightState = True
   , _angleState = 0.0
   , _dragState = (MouseState Up Up Up, Nothing)
   , _extraInfo = []
-  , _flags = [ Main.Info, ExtraInfo, Flags
+  , _flags = [ Main.Info, Flags, Lights, FramesPerSecond
              , Main.Fill, DragInfo, MouseInfo, ShiftInfo
+             , Shapes
              ]
+  , _timeState = (secondsToDiffTime 0, 0, 0)
   }
 
 -- Remind $=! with to with 0 left fixity to drop some parens
@@ -90,7 +91,7 @@ infixl 0 $$!
 
 
 ctvf :: CameraShift -> Vertex3 GLdouble
-ctvf (CameraShift x y z) = Vertex3 (fromIntegral x) (fromIntegral y) (fromIntegral z)
+ctvf (CameraShift x y z) = Vertex3 x y z
 
 cube :: GLfloat -> IO ()
 cube w = renderPrimitive Quads $ mapM_ vertex3f
@@ -115,61 +116,132 @@ xangle = 0.0
 yangle = 0.0
 zangle = 0.0
 
+-- dl :: Bool -> IO DisplayList
+-- dl f = do
+dl :: IO DisplayList
+dl = do
+  let scale = [0 .. 3]
+      coords :: [Vector3 GLdouble]
+      coords = nub [ Vector3 a b c | a <- scale, b <- scale, c <- scale ]
+  color $ Color3 1 0 (0 :: GLdouble)
+  defineNewList CompileAndExecute $
+    flip mapM_ coords $ do
+      \v@(Vector3 x y z) -> preservingMatrix $ do
+        translate v
+        renderObject Solid (Cube 0.2) -- 10 10)
+        -- drawCube True
+
+-- display :: IORef ProgramState -> IO ()
+-- display ps = do
+--   programState <- get ps
+--   let f = Main.Fill `elem` programState ^. flags
+--   clear [ColorBuffer, DepthBuffer]
+--   when (Shapes `elem` programState ^. flags) (preservingMatrix $ drawCube f)
+
+--   updateTime ps
+
+--   preservingMatrix (renderInfo programState)
+
+--   swapBuffers
+
+updateTime :: IORef ProgramState -> IO ()
+updateTime ps = do
+  programState <- get ps
+  t <- utctDayTime <$> getCurrentTime
+  let oldTime = programState ^. timeState . _1
+  let p' = if t - oldTime >= 1
+           then let allFrames = programState ^. timeState . _2
+                in programState & timeState .~ (t, 0, allFrames)
+           else programState
+
+  ps $$! p' & timeState . _2 %~ succ -- & angleState %~ (+ 1.0)
+
+
 display :: IORef ProgramState -> DisplayCallback
 display ps = do
   programState <- get ps
-  let l = programState ^. lightState
+  let l = Lights `elem` programState ^. flags
       a = programState ^. angleState
       f = Main.Fill `elem` programState ^. flags
       c = programState ^. cameraShift
       CameraShift x' y' z' = programState ^. cameraShift
-      (x, y, z) = (fromIntegral x' / 10, fromIntegral y' / 10, fromIntegral z')
+      (x, y, z) = (realToFrac $ x' / 10, realToFrac $ y' / 10, realToFrac z')
   clear [ColorBuffer, DepthBuffer]
 
   preservingMatrix drawAxis
 
+  when (Shapes `elem` programState ^. flags) (callList <$> dl  >> return ())
+
+  -- loadIdentity
+  -- pos = Vertex4 0.2 0.2 0.9 0.0
+  preservingMatrix $ do
+    Vertex4 x y z w <- get $ position (Light 0)
+    let height = 0.4
+    translate $ Vector3 x y (z - height)
+    renderObject Solid (Cone 0.1 (realToFrac height) 10 10)
+
+
   loadIdentity
   preservingMatrix (renderInfo programState)
-  light (Light 0) $= if' l Enabled Disabled
-  lookAt (Vertex3 0.0 0.0 z) (Vertex3 0.0 0.0 0.0) (Vector3 0.0 1.0 0.0)
+  lighting $= if' l Enabled Disabled
+  let m = if Middle `elem` programState ^. flags
+          then Vertex3 (0.0) 30.0 0.0
+          else Vertex3 0.0 0.0 0.0
+  lookAt (Vertex3 0.0 0.0 z) m (Vector3 0.0 1.0 0.0)
   rotate (xangle + y) $ Vector3 1.0 0.0 0.0
   rotate (yangle + x) $ Vector3 0.0 1.0 0.0
---  rotate (zangle + fromIntegral z') $ Vector3 0.0 0.0 1.0
-  -- ps $$! programState & angleState %~ (+ 1.0)
 
-  preservingMatrix (drawCube f)
+--  preservingMatrix (drawCube f)
+--  when (Shapes `elem` programState ^. flags) (preservingMatrix $ drawCube f)
+
+  ps $$! programState & angleState %~ (+ 1.0)
+
+  updateTime ps
 
   swapBuffers
+  where
+    drawToLeft f x = preservingMatrix $ do
+      translate $ Vector3 x 0 (0 :: GLdouble)
+      preservingMatrix (drawCube f)
 
-drawAxis :: IO ()
+drawAxis :: IO DisplayList
 drawAxis = do
-  c <- get currentColor
-  preservingMatrix $ do
-    -- X
-    color $ Color3 1.0 0.0 (0.0 :: GLfloat)
 
-    renderPrimitive Lines $ mapM_ vertex3f
-      [ (0.0, 0.0, 0.0)
-      , (10.0, 0.0, 0.0)
-      ]
+  defineNewList CompileAndExecute $ do
+    c <- get currentColor
+    let len = 500.0
+        step = 1
+        apply3 f (x, y, z) = (f x, f y, f z)
+        xv = (1.0, 0, 0)
+        yv = (0.0, 1.0, 0)
+        zv = (0.0, 0.0, 1.0)
+    preservingMatrix $ do
+      -- X
+      color $ Color3 1.0 0.0 (0.0 :: GLfloat)
 
-    -- Y
-    color $ Color3 0.0 1.0 (0.0 :: GLfloat)
+      renderPrimitive Lines $ mapM_ vertex3f $
+        [ (0.0, 0.0, 0.0)
+        , apply3 (* len) xv
+        ] ++ concat (map (\x -> [(x, 0, -1) , (x, 0, 1)] ) [step, step + step .. len])
 
-    renderPrimitive Lines $ mapM_ vertex3f
-      [ (0.0, 0.0, 0.0)
-      , (0.0, 10.0, 0.0)
-      ]
+      -- Y
+      color $ Color3 0.0 1.0 (0.0 :: GLfloat)
 
-    -- Z
-    color $ Color3 0.0 0.0 (1.0 :: GLfloat)
+      renderPrimitive Lines $ mapM_ vertex3f $
+        [ (0.0, 0.0, 0.0)
+        , apply3 (* len) yv
+        ] ++ concat (map (\x -> [(-1, x, 0) , (1, x, 0)] ) [step, step + step .. len])
+          ++ concat (map (\x -> [(0, x, -1) , (0, x, 1)] ) [step, step + step .. len])
 
-    renderPrimitive Lines $ mapM_ vertex3f
-      [ (0.0, 0.0, 0.0)
-      , (0.0, 0.0, 10.0)
-      ]
+      -- Z
+      color $ Color3 0.0 0.0 (1.0 :: GLfloat)
 
-  color c
+      renderPrimitive Lines $ mapM_ vertex3f $
+        [ (0.0, 0.0, 0.0)
+        , apply3 (* len) zv
+        ] ++ concat (map (\x -> [(-1, 0, x) , (1, 0, x)] ) [step, step + step .. len])
+
+    color c
 
 renderInfo :: ProgramState -> IO ()
 renderInfo p = do
@@ -177,7 +249,7 @@ renderInfo p = do
   let helpText =
         [ "Char 'q' -> exitSuccess"
         , "Char 'f'-> toggleFlag ps Main.Fill"
-        , "Char 'l' -> get ps >>= \\p -> ps $$! p & lightState %~ not"
+        , "Char 'l' -> toggleFlag ps Light"
         , "Char 'r' -> get ps >>= \\p -> ps $$! p & cameraShift .~ defaultState ^. cameraShift"
         , "Char 'x' -> onCoord cX succ"
         , "Char 'y' -> onCoord cY succ"
@@ -192,6 +264,7 @@ renderInfo p = do
         , "Char 'm' -> toggleFlag ps MouseInfo"
         , "Char 'h' -> toggleFlag ps Main.Help"
         , "Char 's' -> toggleFlag ps ShiftInfo"
+        , "Char 'p' -> toggleFlag ps FramesPerSecond"
         ]
 
 
@@ -199,7 +272,9 @@ renderInfo p = do
       info = (if ExtraInfo `elem` p ^. flags then p ^. extraInfo else [])
              ++ h MouseInfo mouseState ++ h DragInfo dragState
              ++ h ShiftInfo cameraShift ++ h Flags flags
-      info' = if Main.Help `elem` p ^. flags then helpText else info
+             ++ map (++ " FPS") (h FramesPerSecond (timeState . _3))
+      fps = map (++ " FPS") (h FramesPerSecond (timeState . _3))
+      info' = if FramesPerSecond `elem` p ^. flags then fps else info
 
   if Main.Info `elem` p ^. flags
     then do
@@ -235,6 +310,7 @@ if' p f g = if p then f else g
 
 drawCube :: Bool -> IO ()
 drawCube filled = do
+  color $ Color3 1.0 0 (0 :: GLdouble)
   drawFace filled w
 
   mapM_ (const $ r q 1 0 0 >> drawFace filled w) [1 .. 3 :: Integer]
@@ -247,7 +323,7 @@ drawCube filled = do
   drawFace filled w
 
   where
-    w = 0.8
+    w = 0.1
 
     f, q :: GLfloat
     f = 180.0
@@ -363,8 +439,8 @@ motion ps p@(Position newX newY) = do
       if oldMS == nowMS
       then do
         let CameraShift sx sy sz = pState ^. cameraShift
-            xDifference = newX - oldX + sx
-            yDifference = newY - oldY + sy
+            xDifference = fromIntegral (newX - oldX) + sx
+            yDifference = fromIntegral (newY - oldY) + sy
 
         let p' = pState & cameraShift .~ CameraShift xDifference yDifference sz
         ps $$! p' &  dragState . _2 .~ Just p
@@ -378,7 +454,6 @@ keyboardMouse :: IORef ProgramState -> KeyboardMouseCallback
 keyboardMouse ps key Down _ _ = case key of
   Char 'q' -> exitSuccess
   Char 'f'-> toggleFlag ps Main.Fill
-  Char 'l' -> get ps >>= \p -> ps $$! p & lightState %~ not
   Char 'r' -> get ps >>= \p -> ps $$! p & cameraShift .~ defaultState ^. cameraShift
   Char 'x' -> onCoord cX succ
   Char 'y' -> onCoord cY succ
@@ -386,6 +461,7 @@ keyboardMouse ps key Down _ _ = case key of
   Char 'X' -> onCoord cX pred
   Char 'Y' -> onCoord cY pred
   Char 'Z' -> onCoord cZ pred
+  Char 'l' -> toggleFlag ps Lights
   Char 's' -> toggleFlag ps Flags
   Char 'i' -> toggleFlag ps Main.Info
   Char 'e' -> toggleFlag ps ExtraInfo
@@ -393,11 +469,14 @@ keyboardMouse ps key Down _ _ = case key of
   Char 'm' -> toggleFlag ps MouseInfo
   Char 'h' -> toggleFlag ps Main.Help
   Char 't' -> toggleFlag ps ShiftInfo
+  Char 'p' -> toggleFlag ps FramesPerSecond
+  Char 'M' -> toggleFlag ps Middle
+  Char 'S' -> toggleFlag ps Shapes
 
   MouseButton LeftButton -> setB leftButton
   MouseButton RightButton -> setB rightButton
   MouseButton MiddleButton -> setB middleButton
-  MouseButton WheelDown -> get ps >>= \p -> ps $$! p & cameraShift . cZ %~ pred
+  MouseButton WheelDown -> get ps >>= \p -> ps $$! p & cameraShift . cZ %~ succ
   _ -> print "Mouse down"
   where
     setB f = do
@@ -411,7 +490,7 @@ keyboardMouse ps key Up _ _ = case key of
   MouseButton LeftButton -> setB leftButton >> clearLog ps
   MouseButton RightButton -> setB rightButton
   MouseButton MiddleButton -> setB middleButton
-  MouseButton WheelUp -> get ps >>= \p -> ps $$! p & cameraShift . cZ %~ succ
+  MouseButton WheelUp -> get ps >>= \p -> ps $$! p & cameraShift . cZ %~ pred
   _ -> print "Mouse up"
   where
     setB f = get ps >>= \p -> ps $$! p & mouseState . f .~ Up
