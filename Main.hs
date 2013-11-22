@@ -20,6 +20,7 @@
 -- Maintainer  :  fuuzetsu@fuuzetsu.co.uk
 
 {-# LANGUAGE TemplateHaskell, FlexibleInstances, MultiParamTypeClasses #-}
+{-# OPTIONS_GHC -fno-warn-orphans #-}
 module Main where
 
 
