@@ -26,11 +26,9 @@ module Main where
 import Control.Applicative
 import Control.Monad
 import Control.Lens
-import Data.List
 import Data.Time.Clock
 import Graphics.Rendering.OpenGL
 import Graphics.UI.GLUT
-import Data.Fixed
 import Data.IORef
 import System.Exit
 
@@ -178,20 +176,6 @@ cubeFrame w = renderPrimitive Lines $ mapM_ vertex3f
     ( w,-w,-w), ( w, w,-w),  ( w, w,-w), (-w, w,-w),
     (-w, w,-w), (-w,-w,-w),  (-w,-w,-w), ( w,-w,-w) ]
 
--- | 'DisplayList' drawing a larger number of shapes, just for fun.
-dl :: IO DisplayList
-dl = do
-  let scale = [0, 0.5 .. 8]
-      coords :: [Vector3 GLdouble]
-      coords = nub [ Vector3 a b c | a <- scale, b <- scale, c <- scale ]
-  color $ Color3 1 0 (0 :: GLdouble)
-  defineNewList CompileAndExecute $
-    flip mapM_ coords $ do
-      \v@(Vector3 x y z) -> preservingMatrix $ do
-        translate v
-        renderObject Solid (Cube 0.1) -- 10 10)
-        -- drawCube True
-
 -- | Update current time in the 'ProgramState' to allow us to count
 -- | frames per second rendered.
 updateTime :: IORef ProgramState -> IO ()
@@ -211,9 +195,7 @@ display :: IORef ProgramState -> DisplayCallback
 display ps = do
   programState <- get ps
   let l = Lights `elem` programState ^. flags
-      a = programState ^. angleState
       f = Main.Fill `elem` programState ^. flags
-      c = programState ^. cameraShift
       CameraShift x' y' z' = programState ^. cameraShift
       x, y, z :: GLdouble
       (x, y, z) = (realToFrac $ x' / 10, realToFrac $ y' / 10, realToFrac z')
@@ -221,14 +203,12 @@ display ps = do
 
   when (Axis `elem` programState ^. flags) (preservingMatrix drawAxis >> return ())
 
-  when (Shapes `elem` programState ^. flags) (callList <$> dl  >> return ())
-
   -- loadIdentity
   -- pos = Vertex4 0.2 0.2 0.9 0.0
   preservingMatrix $ do
-    Vertex4 x y z w <- get $ position (Light 0)
+    Vertex4 x'' y'' z'' _ <- get $ position (Light 0)
     let height = 0.4
-    translate $ Vector3 x y (z - height)
+    translate $ Vector3 x'' y'' (z'' - height)
     renderObject Solid (Cone 0.1 (realToFrac height) 10 10)
 
 
@@ -242,18 +222,13 @@ display ps = do
   rotate y $ Vector3 1.0 0.0 0.0
   rotate x $ Vector3 0.0 1.0 0.0
 
---  preservingMatrix (drawCube f)
---  when (Shapes `elem` programState ^. flags) (preservingMatrix $ drawCube f)
+  preservingMatrix (drawCube f)
 
   ps $$! programState & angleState %~ (+ 1.0)
 
   updateTime ps
 
   swapBuffers
-  where
-    drawToLeft f x = preservingMatrix $ do
-      translate $ Vector3 x 0 (0 :: GLdouble)
-      preservingMatrix (drawCube f)
 
 -- | Draws the X, Y and Z axis from origin towards positive <relatively
 -- large number>. X axis is red, Y axis is green and Z axis is green.
@@ -300,29 +275,6 @@ drawAxis = do
 -- | Renders information using the current 'ProgramState'
 renderInfo :: ProgramState -> IO ()
 renderInfo p = do
-
-  let helpText =
-        [ "Char 'q' -> exitSuccess"
-        , "Char 'f'-> toggleFlag ps Main.Fill"
-        , "Char 'l' -> toggleFlag ps Light"
-        , "Char 'r' -> get ps >>= \\p -> ps $$! p & cameraShift .~ defaultState ^. cameraShift"
-        , "Char 'x' -> onCoord cX succ"
-        , "Char 'y' -> onCoord cY succ"
-        , "Char 'z' -> onCoord cZ succ"
-        , "Char 'X' -> onCoord cX pred"
-        , "Char 'Y' -> onCoord cY pred"
-        , "Char 'Z' -> onCoord cZ pred"
-        , "Char 's' -> toggleFlag ps Flags"
-        , "Char 'i' -> toggleFlag ps Main.Info"
-        , "Char 'e' -> toggleFlag ps ExtraInfo"
-        , "Char 'd' -> toggleFlag ps DragInfo"
-        , "Char 'm' -> toggleFlag ps MouseInfo"
-        , "Char 'h' -> toggleFlag ps Main.Help"
-        , "Char 's' -> toggleFlag ps ShiftInfo"
-        , "Char 'p' -> toggleFlag ps FramesPerSecond"
-        ]
-
-
   let h f g = if f `elem` p ^. flags then [p ^. g ^. to show] else []
       info = (if ExtraInfo `elem` p ^. flags then p ^. extraInfo else [])
              ++ h MouseInfo mouseState ++ h DragInfo dragState
@@ -345,7 +297,7 @@ renderInfo p = do
         matrixMode $= Modelview 0
         preservingMatrix $ do
           color $ Color3 1.0 0.0 (0.0 :: GLfloat)
-          let positions = [ Vertex2 22 (x :: GLint) | x <- [22, 44 .. ] ]
+          let positions = [ Vertex2 22 (x' :: GLint) | x' <- [22, 44 .. ] ]
               r = zip positions (reverse info')
           mapM_ (\(p', t) -> rasterPos p' >> renderString Helvetica18 t) r
 
