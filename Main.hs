@@ -1,6 +1,7 @@
 {-# LANGUAGE TemplateHaskell, FlexibleInstances, MultiParamTypeClasses #-}
 module Main where
 
+
 import Control.Applicative
 import Control.Monad
 import Control.Lens
@@ -37,7 +38,7 @@ data CameraShift = CameraShift { _cX :: GLdouble
                       deriving (Eq, Show)
 
 data Flag = Info | ExtraInfo | CameraInfo | Flags | ShiftInfo | Middle | Shapes
-          | DragInfo | MouseInfo | Fill | Help | Lights | FramesPerSecond
+          | DragInfo | MouseInfo | Fill | Help | Lights | FramesPerSecond | Axis
           deriving (Show, Eq)
 
 data ProgramState = ProgramState { _cameraShift :: CameraShift
@@ -79,7 +80,7 @@ defaultState = ProgramState
   , _extraInfo = []
   , _flags = [ Main.Info, Flags, Lights, FramesPerSecond
              , Main.Fill, DragInfo, MouseInfo, ShiftInfo
-             , Shapes
+             , Shapes, Axis
              ]
   , _timeState = (secondsToDiffTime 0, 0, 0)
   }
@@ -120,7 +121,7 @@ zangle = 0.0
 -- dl f = do
 dl :: IO DisplayList
 dl = do
-  let scale = [0 .. 3]
+  let scale = [0, 0.5 .. 8]
       coords :: [Vector3 GLdouble]
       coords = nub [ Vector3 a b c | a <- scale, b <- scale, c <- scale ]
   color $ Color3 1 0 (0 :: GLdouble)
@@ -128,7 +129,7 @@ dl = do
     flip mapM_ coords $ do
       \v@(Vector3 x y z) -> preservingMatrix $ do
         translate v
-        renderObject Solid (Cube 0.2) -- 10 10)
+        renderObject Solid (Cube 0.1) -- 10 10)
         -- drawCube True
 
 -- display :: IORef ProgramState -> IO ()
@@ -168,7 +169,7 @@ display ps = do
       (x, y, z) = (realToFrac $ x' / 10, realToFrac $ y' / 10, realToFrac z')
   clear [ColorBuffer, DepthBuffer]
 
-  preservingMatrix drawAxis
+  when (Axis `elem` programState ^. flags) (preservingMatrix drawAxis >> return ())
 
   when (Shapes `elem` programState ^. flags) (callList <$> dl  >> return ())
 
@@ -441,8 +442,14 @@ motion ps p@(Position newX newY) = do
         let CameraShift sx sy sz = pState ^. cameraShift
             xDifference = fromIntegral (newX - oldX) + sx
             yDifference = fromIntegral (newY - oldY) + sy
+            zDifference = fromIntegral (newY - oldY) + sz
 
-        let p' = pState & cameraShift .~ CameraShift xDifference yDifference sz
+        let p' = case nowMS of
+              MouseState Down _ _ -> pState & cameraShift .~ CameraShift xDifference yDifference sz
+              MouseState _ Down _ -> pState & cameraShift .~ CameraShift sx sy zDifference
+              MouseState _ _ _ -> pState
+
+
         ps $$! p' &  dragState . _2 .~ Just p
         writeLog ps p
 
@@ -472,6 +479,7 @@ keyboardMouse ps key Down _ _ = case key of
   Char 'p' -> toggleFlag ps FramesPerSecond
   Char 'M' -> toggleFlag ps Middle
   Char 'S' -> toggleFlag ps Shapes
+  Char 'a' -> toggleFlag ps Axis
 
   MouseButton LeftButton -> setB leftButton
   MouseButton RightButton -> setB rightButton
