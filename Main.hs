@@ -27,6 +27,7 @@ module Main where
 import Control.Applicative
 import Control.Monad
 import Control.Lens
+import Data.Fixed (mod')
 import Data.Time.Clock
 import Graphics.Rendering.OpenGL
 import Graphics.UI.GLUT
@@ -148,7 +149,7 @@ defaultState = ProgramState
              , Shapes, Axis, FocusPoint
              ]
   , _timeState = (secondsToDiffTime 0, 0, 0)
-  , _cameraFocus = (Vertex3 0 0 0 : map tvd (cubeVertices cubeSize), 0)
+  , _cameraFocus = (Vertex3 0 0 0 : map tvd (cubeCorners cubeSize), 0)
   }
 
 -- | Same as '($=!)' except with left fixity of 0 for convenience. Clashes with
@@ -173,6 +174,11 @@ cubeVertices w =
     (-w, w, w), (-w, w,-w), (-w,-w,-w), (-w,-w, w),
     ( w,-w, w), ( w,-w,-w), (-w,-w,-w), (-w,-w, w),
     ( w, w,-w), ( w,-w,-w), (-w,-w,-w), (-w, w,-w) ]
+
+cubeCorners :: GLfloat -> [(GLfloat, GLfloat, GLfloat)]
+cubeCorners w =
+  [ (w, w, w), (-w, w, w), (-w, -w, w), (w, -w, w)
+  , (w, w, -w), (-w, w, -w), (-w, -w, -w), (w, -w, -w) ]
 
 -- | Renders a cube with edges of a specified length.
 cube :: GLfloat -> IO ()
@@ -206,13 +212,13 @@ updateTime ps = do
 display :: IORef ProgramState -> DisplayCallback
 display ps = do
   programState <- get ps
+
   let l = Lights `elem` programState ^. flags
       f = Main.Fill `elem` programState ^. flags
       CameraShift x' y' z' = programState ^. cameraShift
-      x, y, z :: GLdouble
-      (x, y, z) = (realToFrac $ x' / 10, realToFrac $ y' / 10, realToFrac z')
+      (x, y, z) = (realToFrac $ x' / 10, realToFrac $ y' / 10, realToFrac z') :: (GLdouble, GLdouble, GLdouble)
       (points, focn)  = programState ^. cameraFocus
-      r = points !! focn & _3 %~ (+ z)
+      r = points !! focn
 
   clear [ColorBuffer, DepthBuffer]
 
@@ -222,14 +228,24 @@ display ps = do
   loadIdentity
   preservingMatrix (renderInfo programState)
   lighting $= if' l Enabled Disabled
-  let m = if Middle `elem` programState ^. flags
-          then Vertex3 (0.0) 30.0 0.0
-          else Vertex3 0.0 0.0 0.0
-  lookAt r m (Vector3 0.0 1.0 0.0)
-  rotate y $ Vector3 1.0 0.0 0.0
-  rotate x $ Vector3 0.0 1.0 0.0
 
-  preservingMatrix (drawCube f)
+  -- Camera movement
+  let (nx, ny, nz) = (z + cos (x `mod'` 2 * pi), z + cos (y `mod'` 2 * pi), z)
+  lookAt (Vertex3 nx ny z) r (Vector3 0.0 1.0 0.0)
+  -- rotate y $ Vector3 1.0 0.0 0.0
+  -- rotate x $ Vector3 0.0 1.0 0.0
+
+--  preservingMatrix $ drawCube f
+  preservingMatrix $ do
+    let points :: [GLfloat]
+        points = [0, 0.1  .. 2 * pi]
+        points' = [0, 0.1 .. pi]
+        r' = 52
+        s = [ (r' * cos theta * sin phi, r' * sin theta * sin phi, r' * cos phi)
+            | theta <- points, phi <- points'  ]
+    renderPrimitive LineLoop $ mapM_ vertex3f s
+
+
 
   ps $$! programState & angleState %~ (+ 1.0)
 
