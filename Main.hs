@@ -82,26 +82,30 @@ data Flag = Info -- ^ Display information on the screen
                             -- this causes the FPS to drop.
           | Axis -- ^ X/Y/Z axis drawing. X = Red Y = Green Z = Blue
                  -- Draw from origin to positive <relatively large number>.
+          | FocusPoint -- ^ Show the current camera focus point.
           deriving (Show, Eq)
 
 -- | We carry program state using this data type. We do the disgusting thing
 -- and wrap it in 'IORef' (or 'MVar'. It's not as evil as it normally would be
 -- considering we're running in the IO monad anyway for OpenGL/GLUT but it's not
 -- ideal either.
-data ProgramState = ProgramState { _cameraShift :: CameraShift
-                                 , _mouseState :: MouseState
-                                 , _angleState :: GLfloat
-                                 , _dragState :: (MouseState, Maybe Position)
-                                   -- ^ The second element of the pair
-                                   -- indicates the last position we were at
-                                   -- during a mouse drag.
-                                 , _extraInfo :: [String]
-                                 , _flags :: [Flag]
-                                 , _timeState :: (DiffTime, Int, Int)
-                                   -- ^ Timing information. Last second,
-                                   -- number of frames since last second and
-                                   -- number of frames in the second beforehand.
-                                 }
+data ProgramState = ProgramState
+                      { _cameraShift :: CameraShift
+                      , _mouseState :: MouseState
+                      , _angleState :: GLfloat
+                      , _dragState :: (MouseState, Maybe Position)
+                                      -- ^ The second element of the pair
+                                      -- indicates the last position we were at
+                                      -- during a mouse drag.
+                      , _extraInfo :: [String]
+                      , _flags :: [Flag]
+                      , _timeState :: (DiffTime, Int, Int)
+                                      -- ^ Timing information. Last second,
+                                      -- number of frames since last second and
+                                      -- number of frames in the second
+                                      -- beforehand.
+                      , _cameraFocus :: ([Vertex3 GLdouble], Int)
+                      }
 
 -- We generate lenses with Template Haskell here.
 makeLenses ''MouseState
@@ -139,11 +143,12 @@ defaultState = ProgramState
   , _angleState = 0.0
   , _dragState = (MouseState Up Up Up, Nothing)
   , _extraInfo = []
-  , _flags = [ Main.Info, Flags, Lights, FramesPerSecond
+  , _flags = [ Flags, Lights, FramesPerSecond
              , Main.Fill, DragInfo, MouseInfo, ShiftInfo
-             , Shapes, Axis
+             , Shapes, Axis, FocusPoint
              ]
   , _timeState = (secondsToDiffTime 0, 0, 0)
+  , _cameraFocus = (Vertex3 0 0 0 : map tvd (cubeVertices cubeSize), 0)
   }
 
 -- | Same as '($=!)' except with left fixity of 0 for convenience. Clashes with
@@ -157,15 +162,21 @@ infixl 0 $$!
 ctvf :: CameraShift -> Vertex3 GLdouble
 ctvf (CameraShift x y z) = Vertex3 x y z
 
--- | Renders a cube with edges of a specified length.
-cube :: GLfloat -> IO ()
-cube w = renderPrimitive Quads $ mapM_ vertex3f
+tvd :: (GLfloat, GLfloat, GLfloat) -> Vertex3 GLdouble
+tvd (x, y, z) = Vertex3 (realToFrac x) (realToFrac y) (realToFrac z)
+
+cubeVertices :: GLfloat -> [(GLfloat, GLfloat, GLfloat)]
+cubeVertices w =
   [ ( w, w, w), ( w, w,-w), ( w,-w,-w), ( w,-w, w),
     ( w, w, w), ( w, w,-w), (-w, w,-w), (-w, w, w),
     ( w, w, w), ( w,-w, w), (-w,-w, w), (-w, w, w),
     (-w, w, w), (-w, w,-w), (-w,-w,-w), (-w,-w, w),
     ( w,-w, w), ( w,-w,-w), (-w,-w,-w), (-w,-w, w),
     ( w, w,-w), ( w,-w,-w), (-w,-w,-w), (-w, w,-w) ]
+
+-- | Renders a cube with edges of a specified length.
+cube :: GLfloat -> IO ()
+cube w = renderPrimitive Quads $ mapM_ vertex3f (cubeVertices w)
 
 -- | Renders a frame for a cube with edges of a specified length.
 cubeFrame :: GLfloat -> IO ()
@@ -189,7 +200,7 @@ updateTime ps = do
                 in programState & timeState .~ (t, 0, allFrames)
            else programState
 
-  ps $$! p' & timeState . _2 %~ succ -- & angleState %~ (+ 1.0)
+  ps $$! p' & timeState . _2 %~ succ
 
 -- | Display callback.
 display :: IORef ProgramState -> DisplayCallback
@@ -200,18 +211,13 @@ display ps = do
       CameraShift x' y' z' = programState ^. cameraShift
       x, y, z :: GLdouble
       (x, y, z) = (realToFrac $ x' / 10, realToFrac $ y' / 10, realToFrac z')
+      (points, focn)  = programState ^. cameraFocus
+      r = points !! focn & _3 %~ (+ z)
+
   clear [ColorBuffer, DepthBuffer]
 
-  when (Axis `elem` programState ^. flags) (preservingMatrix drawAxis >> return ())
-
-  -- loadIdentity
-  -- pos = Vertex4 0.2 0.2 0.9 0.0
-  preservingMatrix $ do
-    Vertex4 x'' y'' z'' _ <- get $ position (Light 0)
-    let height = 0.4
-    translate $ Vector3 x'' y'' (z'' - height)
-    renderObject Solid (Cone 0.1 (realToFrac height) 10 10)
-
+  when (Axis `elem` programState ^. flags)
+    (preservingMatrix drawAxis >> return ())
 
   loadIdentity
   preservingMatrix (renderInfo programState)
@@ -219,7 +225,7 @@ display ps = do
   let m = if Middle `elem` programState ^. flags
           then Vertex3 (0.0) 30.0 0.0
           else Vertex3 0.0 0.0 0.0
-  lookAt (Vertex3 0.0 0.0 z) m (Vector3 0.0 1.0 0.0)
+  lookAt r m (Vector3 0.0 1.0 0.0)
   rotate y $ Vector3 1.0 0.0 0.0
   rotate x $ Vector3 0.0 1.0 0.0
 
@@ -245,6 +251,7 @@ drawAxis = do
         xv = (1.0, 0, 0)
         yv = (0.0, 1.0, 0)
         zv = (0.0, 0.0, 1.0)
+        rl = [step , step + step .. len]
     preservingMatrix $ do
       -- X
       color $ Color3 1.0 0.0 (0.0 :: GLfloat)
@@ -252,7 +259,7 @@ drawAxis = do
       renderPrimitive Lines $ mapM_ vertex3f $
         [ (0.0, 0.0, 0.0)
         , apply3 (* len) xv
-        ] ++ concat (map (\x -> [(x, 0, -1) , (x, 0, 1)] ) [step, step + step .. len])
+        ] ++ concat (map (\x -> [(x, 0, -1) , (x, 0, 1)] ) rl)
 
       -- Y
       color $ Color3 0.0 1.0 (0.0 :: GLfloat)
@@ -260,8 +267,8 @@ drawAxis = do
       renderPrimitive Lines $ mapM_ vertex3f $
         [ (0.0, 0.0, 0.0)
         , apply3 (* len) yv
-        ] ++ concat (map (\x -> [(-1, x, 0) , (1, x, 0)] ) [step, step + step .. len])
-          ++ concat (map (\x -> [(0, x, -1) , (0, x, 1)] ) [step, step + step .. len])
+        ] ++ concat (map (\x -> [(-1, x, 0) , (1, x, 0)] ) rl)
+          ++ concat (map (\x -> [(0, x, -1) , (0, x, 1)] ) rl)
 
       -- Z
       color $ Color3 0.0 0.0 (1.0 :: GLfloat)
@@ -269,7 +276,7 @@ drawAxis = do
       renderPrimitive Lines $ mapM_ vertex3f $
         [ (0.0, 0.0, 0.0)
         , apply3 (* len) zv
-        ] ++ concat (map (\x -> [(-1, 0, x) , (1, 0, x)] ) [step, step + step .. len])
+        ] ++ concat (map (\x -> [(-1, 0, x) , (1, 0, x)] ) rl)
 
     color c
 
@@ -277,33 +284,41 @@ drawAxis = do
 renderInfo :: ProgramState -> IO ()
 renderInfo p = do
   let h f g = if f `elem` p ^. flags then [p ^. g ^. to show] else []
-      info = (if ExtraInfo `elem` p ^. flags then p ^. extraInfo else [])
-             ++ h MouseInfo mouseState ++ h DragInfo dragState
-             ++ h ShiftInfo cameraShift ++ h Flags flags
-             ++ map (++ " FPS") (h FramesPerSecond (timeState . _3))
-      fps = map (++ " FPS") (h FramesPerSecond (timeState . _3))
-      info' = if FramesPerSecond `elem` p ^. flags then fps else info
+      info = if Main.Info `elem` p ^. flags
+             then (if ExtraInfo `elem` p ^. flags then p ^. extraInfo else [])
+                  ++ h MouseInfo mouseState ++ h DragInfo dragState
+                  ++ h ShiftInfo cameraShift
+                  ++ if FocusPoint `elem` p ^. flags
+                     then let n = p ^. cameraFocus . _2
+                          in [show $ (p ^. cameraFocus . _1) !! n]
+                     else []
+                  ++ h Flags flags
+             else []
+      fps = if FramesPerSecond `elem` p ^. flags
+            then map (++ " FPS") (h FramesPerSecond (timeState . _3))
+            else []
 
-  if Main.Info `elem` p ^. flags
-    then do
-      c <- get currentColor
 
-      matrixMode $= Projection
-      preservingMatrix $ do
+  c <- get currentColor
 
-        loadIdentity
-        Size x y <- get windowSize
-        ortho2D 0.0 (fromIntegral x) 0.0 (fromIntegral y)
+  matrixMode $= Projection
+  preservingMatrix $ do
 
-        matrixMode $= Modelview 0
-        preservingMatrix $ do
-          color $ Color3 1.0 0.0 (0.0 :: GLfloat)
-          let positions = [ Vertex2 22 (x' :: GLint) | x' <- [22, 44 .. ] ]
-              r = zip positions (reverse info')
-          mapM_ (\(p', t) -> rasterPos p' >> renderString Helvetica18 t) r
+    loadIdentity
+    Size x y <- get windowSize
+    ortho2D 0.0 (fromIntegral x) 0.0 (fromIntegral y)
 
+    matrixMode $= Modelview 0
+    preservingMatrix $ do
+      color $ Color3 1.0 0.0 (0.0 :: GLfloat)
+      let positions = [ Vertex2 22 (x' :: GLint) | x' <- [22, 44 .. ] ]
+          r = zip positions . reverse $
+              if FramesPerSecond `elem` p ^. flags
+              then info ++ fps
+              else info
+      mapM_ (\(p', t) -> rasterPos p' >> renderString Helvetica18 t) r
       color c
-    else return ()
+
 
 -- | Draw a face of a cube. Used by 'drawCube'.
 drawFace :: Bool -> GLfloat -> IO ()
@@ -318,26 +333,27 @@ drawFace filled s =
 if' :: Bool -> a -> a -> a
 if' p f g = if p then f else g
 
+cubeSize :: GLfloat
+cubeSize = 2.0
+
 -- | Draws a cube or a cube wireframe dependending on the passed in
 -- value.
 drawCube :: Bool -- ^ If true, the cube is solid. Else, it's wireframe.
             -> IO ()
 drawCube filled = do
   color $ Color3 1.0 0 (0 :: GLdouble)
-  drawFace filled w
+  drawFace filled cubeSize
 
-  mapM_ (const $ r q 1 0 0 >> drawFace filled w) [1 .. 3 :: Integer]
+  mapM_ (const $ r q 1 0 0 >> drawFace filled cubeSize) [1 .. 3 :: Integer]
 
   r q 1 0 0
   r q 0 1 0
-  drawFace filled w
+  drawFace filled cubeSize
 
   r f 0 1 0
-  drawFace filled w
+  drawFace filled cubeSize
 
   where
-    w = 0.1
-
     f, q :: GLfloat
     f = 180.0
     q = 90.0
@@ -371,7 +387,7 @@ reshape (Size w h) = do
   viewport $= (Position 0 0, Size w h)
   matrixMode $= Projection
   loadIdentity
-  frustum (-1) 1 (-1) 1 5 1500
+  frustum (-1) 1 (-1) 1 5 11500
   matrixMode $= Modelview 0
 
 -- | Initialize OpenGL options. Includes light model and material
@@ -464,8 +480,10 @@ motion ps p@(Position newX newY) = do
             zDifference = fromIntegral (newY - oldY) + sz
 
         let p' = case nowMS of
-              MouseState Down _ _ -> pState & cameraShift .~ CameraShift xDifference yDifference sz
-              MouseState _ Down _ -> pState & cameraShift .~ CameraShift sx sy zDifference
+              MouseState Down _ _ -> pState & cameraShift
+                                     .~ CameraShift xDifference yDifference sz
+              MouseState _ Down _ -> pState & cameraShift
+                                     .~ CameraShift sx sy zDifference
               MouseState _ _ _ -> pState
 
 
@@ -475,12 +493,23 @@ motion ps p@(Position newX newY) = do
       else do ps $$! pState & dragState .~ (nowMS, Just p)
               writeLog ps p
 
+-- | Advances camera focus between pre-defined points on the cube. Effectively a
+-- poor-man's zipper.
+advanceFocus :: IORef ProgramState -> IO ()
+advanceFocus ps = do
+  p <- get ps
+  let (points, n) = p ^. cameraFocus
+  ps $$! p & cameraFocus . _2 %~ if n >= (length points - 1)
+                                 then const 0
+                                 else (+ 1)
+
 -- | Keyboard and mouse callback. Deals with flag toggling and camera shifting.
 keyboardMouse :: IORef ProgramState -> KeyboardMouseCallback
 keyboardMouse ps key Down _ _ = case key of
   Char 'q' -> exitSuccess
   Char 'f'-> toggleFlag ps Main.Fill
-  Char 'r' -> get ps >>= \p -> ps $$! p & cameraShift .~ defaultState ^. cameraShift
+  Char 'r' -> get ps >>= \p -> ps $$! p & cameraShift
+                               .~ defaultState ^. cameraShift
   Char 'x' -> onCoord cX succ
   Char 'y' -> onCoord cY succ
   Char 'z' -> onCoord cZ succ
@@ -499,12 +528,13 @@ keyboardMouse ps key Down _ _ = case key of
   Char 'M' -> toggleFlag ps Middle
   Char 'S' -> toggleFlag ps Shapes
   Char 'a' -> toggleFlag ps Axis
+  Char 'n' -> advanceFocus ps
 
   MouseButton LeftButton -> setB leftButton
   MouseButton RightButton -> setB rightButton
   MouseButton MiddleButton -> setB middleButton
   MouseButton WheelDown -> get ps >>= \p -> ps $$! p & cameraShift . cZ %~ succ
-  _ -> print "Mouse down"
+  _ -> return ()
   where
     setB f = do
       p <- get ps
@@ -518,6 +548,6 @@ keyboardMouse ps key Up _ _ = case key of
   MouseButton RightButton -> setB rightButton
   MouseButton MiddleButton -> setB middleButton
   MouseButton WheelUp -> get ps >>= \p -> ps $$! p & cameraShift . cZ %~ pred
-  _ -> print "Mouse up"
+  _ -> return ()
   where
     setB f = get ps >>= \p -> ps $$! p & mouseState . f .~ Up
