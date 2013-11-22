@@ -11,6 +11,14 @@
 -- You should have received a copy of the GNU General Public License
 -- along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
+-- |
+-- Module      :  Main
+-- Description :  Coursework 2 submission for CM20219 course ran in
+--                University of Bath in 2013. Submission by mk440
+-- Copyright   :  (c) Mateusz Kowalczyk 2013
+-- License     :  GPLv3
+-- Maintainer  :  fuuzetsu@fuuzetsu.co.uk
+
 {-# LANGUAGE TemplateHaskell, FlexibleInstances, MultiParamTypeClasses #-}
 module Main where
 
@@ -26,9 +34,11 @@ import Data.Fixed
 import Data.IORef
 import System.Exit
 
+-- | Specifies a glVertex3f from a 'GLfloat' triple.
 vertex3f :: (GLfloat, GLfloat, GLfloat) -> IO ()
 vertex3f (x, y, z) = vertex $ Vertex3 x y z
 
+-- Here we create field instances for Vertex3 as convenience.
 instance Field1 (Vertex3 a) (Vertex3 a) a a where
   _1 k (Vertex3 x y z) = indexed k (0 :: Int) x <&> \x' -> Vertex3 x' y z
 
@@ -39,51 +49,90 @@ instance Field3 (Vertex3 a) (Vertex3 a) a a where
   _3 k (Vertex3 x y z) = indexed k (0 :: Int) z <&> \z' -> Vertex3 x y z'
 
 
+-- | Encoding of the status of three mouse buttons. Each button is
+-- in a state specified by 'KeyState'
 data MouseState = MouseState { _leftButton :: KeyState
                              , _rightButton :: KeyState
                              , _middleButton :: KeyState
                              } deriving (Eq, Show)
 
+-- | The position of the eye camera from the origin.
 data CameraShift = CameraShift { _cX :: GLdouble
                                , _cY :: GLdouble
                                , _cZ :: GLdouble
                                }
                       deriving (Eq, Show)
 
-data Flag = Info | ExtraInfo | CameraInfo | Flags | ShiftInfo | Middle | Shapes
-          | DragInfo | MouseInfo | Fill | Help | Lights | FramesPerSecond | Axis
+-- | Various program flags. Note that rendering 'Info' or other text
+-- results in pretty hefty frame rate drop on my (very slow) netbook so it's
+-- not advisable to use this unless it's for debugging.
+data Flag = Info -- ^ Display information on the screen
+          | ExtraInfo -- ^ Printing of extra information produced
+                      -- throughout the program.
+          | Flags -- ^ Show enabled flags in the information.
+          | ShiftInfo -- ^ Information on current 'CameraShift'
+          | Middle -- ^ Translate to the middle of many shapes. Only useful
+                   -- with 'dl'. Currently broken
+          | Shapes -- ^ Render a lot more shapes. For fun.
+          | DragInfo -- ^ Show information on mouse drag.
+          | MouseInfo -- ^ Information on 'MouseState'
+          | Fill -- ^ Fill the shapes we are rendering.
+          | Help -- ^ Render help instead of information.
+          | Lights -- ^ Turns on lighting.
+          | FramesPerSecond -- ^ Renders frames per seconds. Ironically
+                            -- this causes the FPS to drop.
+          | Axis -- ^ X/Y/Z axis drawing. X = Red Y = Green Z = Blue
+                 -- Draw from origin to positive <relatively large number>.
           deriving (Show, Eq)
 
+-- | We carry program state using this data type. We do the disgusting thing
+-- and wrap it in 'IORef' (or 'MVar'. It's not as evil as it normally would be
+-- considering we're running in the IO monad anyway for OpenGL/GLUT but it's not
+-- ideal either.
 data ProgramState = ProgramState { _cameraShift :: CameraShift
                                  , _mouseState :: MouseState
                                  , _angleState :: GLfloat
                                  , _dragState :: (MouseState, Maybe Position)
+                                   -- ^ The second element of the pair
+                                   -- indicates the last position we were at
+                                   -- during a mouse drag.
                                  , _extraInfo :: [String]
                                  , _flags :: [Flag]
                                  , _timeState :: (DiffTime, Int, Int)
+                                   -- ^ Timing information. Last second,
+                                   -- number of frames since last second and
+                                   -- number of frames in the second beforehand.
                                  }
+
+-- We generate lenses with Template Haskell here.
 makeLenses ''MouseState
 makeLenses ''ProgramState
 makeLenses ''CameraShift
 
+-- | Enable a 'Flag' for a given 'ProgramState'.
 addFlag :: IORef ProgramState -> Flag -> IO ()
 addFlag ps f = do
   p <- get ps
   ps $$! p & flags %~ (\fl -> if f `elem` fl then fl else f : fl)
 
+-- | Clear a 'Flag' from the 'ProgramState'
 clearFlag :: IORef ProgramState -> Flag -> IO ()
 clearFlag ps f = get ps >>= \p -> ps $$! p & flags %~ filter (/= f)
 
+-- | Toggles a 'Flag' in a 'ProgramState'
 toggleFlag :: IORef ProgramState -> Flag -> IO ()
 toggleFlag ps f = do
   p <- get ps
   if f `elem` p ^. flags then clearFlag ps f else addFlag ps f
 
+-- | Helper for '_extraInfo' that will only keep a preset amount of
+-- logging information.
 (++?) :: [a] -> [a] -> [a]
 x ++? y
   | length x >= 20 = tail x ++ y
   | otherwise = x ++ y
 
+-- | A sensible starting state for the program.
 defaultState :: ProgramState
 defaultState = ProgramState
   { _cameraShift = CameraShift (-350) 350 40
@@ -98,15 +147,18 @@ defaultState = ProgramState
   , _timeState = (secondsToDiffTime 0, 0, 0)
   }
 
--- Remind $=! with to with 0 left fixity to drop some parens
+-- | Same as '($=!)' except with left fixity of 0 for convenience. Clashes with
+-- '($)' but that's usually not a problem with lenses.
 ($$!) :: HasSetter s => s a -> a -> IO ()
 ($$!) = ($=!)
 infixl 0 $$!
 
-
+-- | Helper to convert a 'CameraShift' to 'Vertex3' parametrised
+-- by 'GLdouble'.
 ctvf :: CameraShift -> Vertex3 GLdouble
 ctvf (CameraShift x y z) = Vertex3 x y z
 
+-- | Renders a cube with edges of a specified length.
 cube :: GLfloat -> IO ()
 cube w = renderPrimitive Quads $ mapM_ vertex3f
   [ ( w, w, w), ( w, w,-w), ( w,-w,-w), ( w,-w, w),
@@ -116,6 +168,7 @@ cube w = renderPrimitive Quads $ mapM_ vertex3f
     ( w,-w, w), ( w,-w,-w), (-w,-w,-w), (-w,-w, w),
     ( w, w,-w), ( w,-w,-w), (-w,-w,-w), (-w, w,-w) ]
 
+-- | Renders a frame for a cube with edges of a specified length.
 cubeFrame :: GLfloat -> IO ()
 cubeFrame w = renderPrimitive Lines $ mapM_ vertex3f
   [ ( w,-w, w), ( w, w, w),  ( w, w, w), (-w, w, w),
@@ -125,13 +178,7 @@ cubeFrame w = renderPrimitive Lines $ mapM_ vertex3f
     ( w,-w,-w), ( w, w,-w),  ( w, w,-w), (-w, w,-w),
     (-w, w,-w), (-w,-w,-w),  (-w,-w,-w), ( w,-w,-w) ]
 
-xangle, yangle, zangle :: GLfloat
-xangle = 0.0
-yangle = 0.0
-zangle = 0.0
-
--- dl :: Bool -> IO DisplayList
--- dl f = do
+-- | 'DisplayList' drawing a larger number of shapes, just for fun.
 dl :: IO DisplayList
 dl = do
   let scale = [0, 0.5 .. 8]
@@ -145,19 +192,8 @@ dl = do
         renderObject Solid (Cube 0.1) -- 10 10)
         -- drawCube True
 
--- display :: IORef ProgramState -> IO ()
--- display ps = do
---   programState <- get ps
---   let f = Main.Fill `elem` programState ^. flags
---   clear [ColorBuffer, DepthBuffer]
---   when (Shapes `elem` programState ^. flags) (preservingMatrix $ drawCube f)
-
---   updateTime ps
-
---   preservingMatrix (renderInfo programState)
-
---   swapBuffers
-
+-- | Update current time in the 'ProgramState' to allow us to count
+-- | frames per second rendered.
 updateTime :: IORef ProgramState -> IO ()
 updateTime ps = do
   programState <- get ps
@@ -170,7 +206,7 @@ updateTime ps = do
 
   ps $$! p' & timeState . _2 %~ succ -- & angleState %~ (+ 1.0)
 
-
+-- | Display callback.
 display :: IORef ProgramState -> DisplayCallback
 display ps = do
   programState <- get ps
@@ -179,6 +215,7 @@ display ps = do
       f = Main.Fill `elem` programState ^. flags
       c = programState ^. cameraShift
       CameraShift x' y' z' = programState ^. cameraShift
+      x, y, z :: GLdouble
       (x, y, z) = (realToFrac $ x' / 10, realToFrac $ y' / 10, realToFrac z')
   clear [ColorBuffer, DepthBuffer]
 
@@ -202,8 +239,8 @@ display ps = do
           then Vertex3 (0.0) 30.0 0.0
           else Vertex3 0.0 0.0 0.0
   lookAt (Vertex3 0.0 0.0 z) m (Vector3 0.0 1.0 0.0)
-  rotate (xangle + y) $ Vector3 1.0 0.0 0.0
-  rotate (yangle + x) $ Vector3 0.0 1.0 0.0
+  rotate y $ Vector3 1.0 0.0 0.0
+  rotate x $ Vector3 0.0 1.0 0.0
 
 --  preservingMatrix (drawCube f)
 --  when (Shapes `elem` programState ^. flags) (preservingMatrix $ drawCube f)
@@ -218,6 +255,9 @@ display ps = do
       translate $ Vector3 x 0 (0 :: GLdouble)
       preservingMatrix (drawCube f)
 
+-- | Draws the X, Y and Z axis from origin towards positive <relatively
+-- large number>. X axis is red, Y axis is green and Z axis is green.
+-- Additionally, horizontal spacers are drawn every 1 unit on each axis.
 drawAxis :: IO DisplayList
 drawAxis = do
 
@@ -257,6 +297,7 @@ drawAxis = do
 
     color c
 
+-- | Renders information using the current 'ProgramState'
 renderInfo :: ProgramState -> IO ()
 renderInfo p = do
 
@@ -311,6 +352,7 @@ renderInfo p = do
       color c
     else return ()
 
+-- | Draw a face of a cube. Used by 'drawCube'.
 drawFace :: Bool -> GLfloat -> IO ()
 drawFace filled s =
   renderPrimitive (if filled then Polygon else LineLoop) $ do
@@ -319,10 +361,14 @@ drawFace filled s =
     vertex3f(s, s, s)
     vertex3f(-s, s, s)
 
+-- | Traditional if_then_else as a function.
 if' :: Bool -> a -> a -> a
 if' p f g = if p then f else g
 
-drawCube :: Bool -> IO ()
+-- | Draws a cube or a cube wireframe dependending on the passed in
+-- value.
+drawCube :: Bool -- ^ If true, the cube is solid. Else, it's wireframe.
+            -> IO ()
 drawCube filled = do
   color $ Color3 1.0 0 (0 :: GLdouble)
   drawFace filled w
@@ -366,6 +412,7 @@ main = do
   initGL
   mainLoop
 
+-- | Reshape callback. Takes in window size.
 reshape :: Size -> IO ()
 reshape (Size w h) = do
   viewport $= (Position 0 0, Size w h)
@@ -374,7 +421,8 @@ reshape (Size w h) = do
   frustum (-1) 1 (-1) 1 5 1500
   matrixMode $= Modelview 0
 
-
+-- | Initialize OpenGL options. Includes light model and material
+-- attributes.
 initGL :: IO ()
 initGL = do
   lighting $= Enabled
@@ -404,6 +452,7 @@ initGL = do
     l = Light 0
     whiteDir = Color4 2 2 2 1
 
+-- | Initialise light (position, diffuse, ambient, …).
 initLight :: IO ()
 initLight = do
   let mSpec = Color4 1 1 1 1
@@ -431,16 +480,20 @@ initLight = do
   lighting $= Enabled
   light l $= Enabled
 
-
+-- | Add a line to '_extraInfo' in the program state.
 writeLog :: Show a => IORef ProgramState -> a -> IO ()
 writeLog ps s = get ps >>= \p -> ps $$! p & extraInfo %~ (++? [show s])
 
+-- | Clears the '_extraInfo' log.
 clearLog :: IORef ProgramState -> IO ()
 clearLog ps = get ps >>= \p -> ps $$! p & extraInfo .~ []
 
+-- | Idle callback. We just redraw the frame whenever possible.
 idle :: IdleCallback
 idle = postRedisplay Nothing
 
+-- | A callback for mouse dragging. Deals with offsetting the 'CameraShift' in
+-- 'ProgramState'.
 motion :: IORef ProgramState -> MotionCallback
 motion ps p@(Position newX newY) = do
   pState <- get ps
@@ -469,7 +522,7 @@ motion ps p@(Position newX newY) = do
       else do ps $$! pState & dragState .~ (nowMS, Just p)
               writeLog ps p
 
-
+-- | Keyboard and mouse callback. Deals with flag toggling and camera shifting.
 keyboardMouse :: IORef ProgramState -> KeyboardMouseCallback
 keyboardMouse ps key Down _ _ = case key of
   Char 'q' -> exitSuccess
