@@ -1,0 +1,25 @@
+name:                Cwk2CM20219
+version:             0.1.0.0
+synopsis:            Cube viewer for CM20219
+-- description:
+license:             GPL-3
+license-file:        LICENSE
+author:              Mateusz Kowalczyk
+maintainer:          fuuzetsu@fuuzetsu.co.uk
+-- copyright:
+category:            Graphics
+build-type:          Simple
+-- extra-source-files:
+cabal-version:       >=1.10
+
+executable cubeviewer
+  main-is:             Main.hs
+  -- other-modules:
+  other-extensions:    TemplateHaskell, FlexibleInstances, MultiParamTypeClasses
+
+  -- I am leaving the bounds very open (or not bounding at all), let me know if you have
+  -- version problems and I'll provide exact bounds.
+
+  build-depends:       base >=4.6, lens, time , OpenGL, GLUT
+  -- hs-source-dirs:
+  default-language:    Haskell2010
