@@ -1,0 +1,13 @@
+‘cabal configure && cabal build’ to build the project.
+Might need to ‘cabal install --only-dependencies’ first. The binary should
+be at dist/build/cubeviewer. Tested with GHC 7.6.3.
+
+Left mouse button rotates the camera around the cube.
+Right mouse button zooms in and out. Use mouse wheel for smaller increments.
+
+Switch focus point using middle mouse button or pressing 'n'. The
+focus points are the middle of the scene and the cube vertices.
+
+You can press 'r' at any time to reset the camera to initial position.
+
+Press 'q' to quit.
