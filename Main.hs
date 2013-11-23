@@ -27,7 +27,6 @@ module Main where
 import Control.Applicative
 import Control.Monad
 import Control.Lens
-import Data.Fixed (mod')
 import Data.Time.Clock
 import Graphics.Rendering.OpenGL
 import Graphics.UI.GLUT
@@ -77,7 +76,6 @@ data Flag = Info -- ^ Display information on the screen
           | DragInfo -- ^ Show information on mouse drag.
           | MouseInfo -- ^ Information on 'MouseState'
           | Fill -- ^ Fill the shapes we are rendering.
-          | Help -- ^ Render help instead of information.
           | Lights -- ^ Turns on lighting.
           | FramesPerSecond -- ^ Renders frames per seconds. Ironically
                             -- this causes the FPS to drop.
@@ -311,7 +309,6 @@ renderInfo p = do
             then map (++ " FPS") (h FramesPerSecond (timeState . _3))
             else []
 
-
   c <- get currentColor
 
   matrixMode $= Projection
@@ -423,8 +420,8 @@ initGL = do
 
   shadeModel $= Smooth
 
-  -- clearColor $= Color4 0.5 1.0 0.75 0.0
-  clearColor $= Color4 0.0 0.0 0.0 0.0
+  clearColor $= Color4 0.5 1.0 0.75 0.0
+  -- clearColor $= Color4 0.0 0.0 0.0 0.0
   cullFace $= Just Back
   hint PerspectiveCorrection $= Nicest
 
@@ -488,8 +485,7 @@ motion ps p@(Position newX newY) = do
       if oldMS == nowMS
       then do
         let CameraShift st sp sr = pState ^. cameraShift
---            xDifference = fromIntegral (newX - oldX) + sx
---            yDifference = fromIntegral (newY - oldY) + sy
+
             zDifference = fromIntegral (newY - oldY) + sr
 
             dx = fromIntegral $ newX - oldX
@@ -540,7 +536,6 @@ keyboardMouse ps key Down _ _ = case key of
   Char 'e' -> toggleFlag ps ExtraInfo
   Char 'd' -> toggleFlag ps DragInfo
   Char 'm' -> toggleFlag ps MouseInfo
-  Char 'h' -> toggleFlag ps Main.Help
   Char 't' -> toggleFlag ps ShiftInfo
   Char 'p' -> toggleFlag ps FramesPerSecond
   Char 'M' -> toggleFlag ps Middle
@@ -551,21 +546,22 @@ keyboardMouse ps key Down _ _ = case key of
   MouseButton LeftButton -> setB leftButton
   MouseButton RightButton -> setB rightButton
   MouseButton MiddleButton -> setB middleButton
-  MouseButton WheelDown -> get ps >>= \p -> ps $$! p & cameraShift . cRadius %~ succ
+  MouseButton WheelDown -> get ps >>= \p -> ps $$! p & cameraShift . cRadius
+                                            %~ succ
   _ -> return ()
   where
     setB f = do
       p <- get ps
       ps $$! p & mouseState . f .~ Down & dragState . _2 .~ Nothing
-      -- clearLog ps
 
     onCoord f g = get ps >>= \p -> ps $$! p & cameraShift . f %~ g
 
 keyboardMouse ps key Up _ _ = case key of
-  MouseButton LeftButton -> setB leftButton -- >> clearLog ps
+  MouseButton LeftButton -> setB leftButton
   MouseButton RightButton -> setB rightButton
   MouseButton MiddleButton -> setB middleButton
-  MouseButton WheelUp -> get ps >>= \p -> ps $$! p & cameraShift . cRadius %~ pred
+  MouseButton WheelUp -> get ps >>= \p -> ps $$! p & cameraShift . cRadius
+                                          %~ pred
   _ -> return ()
   where
     setB f = get ps >>= \p -> ps $$! p & mouseState . f .~ Up
