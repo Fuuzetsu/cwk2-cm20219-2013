@@ -19,19 +19,20 @@
 -- License     :  GPLv3
 -- Maintainer  :  fuuzetsu@fuuzetsu.co.uk
 
-{-# LANGUAGE TemplateHaskell, FlexibleInstances, MultiParamTypeClasses #-}
+{-# LANGUAGE FlexibleInstances     #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
+{-# LANGUAGE TemplateHaskell       #-}
 {-# OPTIONS_GHC -fno-warn-orphans #-}
 module Main where
 
 
-import Control.Applicative
-import Control.Monad
-import Control.Lens
-import Data.Time.Clock
-import Graphics.Rendering.OpenGL
-import Graphics.UI.GLUT
-import Data.IORef
-import System.Exit
+import           Control.Applicative
+import           Control.Lens
+import           Data.IORef
+import           Data.Time.Clock
+import           Graphics.Rendering.OpenGL
+import           Graphics.UI.GLUT
+import           System.Exit
 
 -- | Specifies a glVertex3f from a 'GLfloat' triple.
 vertex3f :: (GLfloat, GLfloat, GLfloat) -> IO ()
@@ -50,14 +51,14 @@ instance Field3 (Vertex3 a) (Vertex3 a) a a where
 
 -- | Encoding of the status of three mouse buttons. Each button is
 -- in a state specified by 'KeyState'
-data MouseState = MouseState { _leftButton :: KeyState
-                             , _rightButton :: KeyState
+data MouseState = MouseState { _leftButton   :: KeyState
+                             , _rightButton  :: KeyState
                              , _middleButton :: KeyState
                              } deriving (Eq, Show)
 
 -- | The position of the eye camera from the origin.
-data CameraShift = CameraShift { _cTheta :: GLdouble
-                               , _cPhi :: GLdouble
+data CameraShift = CameraShift { _cTheta  :: GLdouble
+                               , _cPhi    :: GLdouble
                                , _cRadius :: GLdouble
                                }
                       deriving (Eq, Show)
@@ -66,17 +67,9 @@ data CameraShift = CameraShift { _cTheta :: GLdouble
 -- results in pretty hefty frame rate drop on my (very slow) netbook so it's
 -- not advisable to use this unless it's for debugging.
 data Flag = Info -- ^ Display information on the screen
-          | ExtraInfo -- ^ Printing of extra information produced
-                      -- throughout the program.
-          | Flags -- ^ Show enabled flags in the information.
           | ShiftInfo -- ^ Information on current 'CameraShift'
-          | Middle -- ^ Translate to the middle of many shapes. Only useful
-                   -- with 'dl'. Currently broken
-          | Shapes -- ^ Render a lot more shapes. For fun.
           | DragInfo -- ^ Show information on mouse drag.
           | MouseInfo -- ^ Information on 'MouseState'
-          | Fill -- ^ Fill the shapes we are rendering.
-          | Lights -- ^ Turns on lighting.
           | FramesPerSecond -- ^ Renders frames per seconds. Ironically
                             -- this causes the FPS to drop.
           | Axis -- ^ X/Y/Z axis drawing. X = Red Y = Green Z = Blue
@@ -90,15 +83,12 @@ data Flag = Info -- ^ Display information on the screen
 -- ideal either.
 data ProgramState = ProgramState
                       { _cameraShift :: CameraShift
-                      , _mouseState :: MouseState
-                      , _angleState :: GLfloat
-                      , _dragState :: (MouseState, Maybe Position)
+                      , _mouseState  :: MouseState
+                      , _dragState   :: (MouseState, Maybe Position)
                                       -- ^ The second element of the pair
                                       -- indicates the last position we were at
                                       -- during a mouse drag.
-                      , _extraInfo :: [String]
-                      , _flags :: [Flag]
-                      , _timeState :: (DiffTime, Int, Int)
+                      , _timeState   :: (DiffTime, Int, Int)
                                       -- ^ Timing information. Last second,
                                       -- number of frames since last second and
                                       -- number of frames in the second
@@ -111,41 +101,13 @@ makeLenses ''MouseState
 makeLenses ''ProgramState
 makeLenses ''CameraShift
 
--- | Enable a 'Flag' for a given 'ProgramState'.
-addFlag :: IORef ProgramState -> Flag -> IO ()
-addFlag ps f = do
-  p <- get ps
-  ps $$! p & flags %~ (\fl -> if f `elem` fl then fl else f : fl)
-
--- | Clear a 'Flag' from the 'ProgramState'
-clearFlag :: IORef ProgramState -> Flag -> IO ()
-clearFlag ps f = get ps >>= \p -> ps $$! p & flags %~ filter (/= f)
-
--- | Toggles a 'Flag' in a 'ProgramState'
-toggleFlag :: IORef ProgramState -> Flag -> IO ()
-toggleFlag ps f = do
-  p <- get ps
-  if f `elem` p ^. flags then clearFlag ps f else addFlag ps f
-
--- | Helper for '_extraInfo' that will only keep a preset amount of
--- logging information.
-(++?) :: [a] -> [a] -> [a]
-x ++? y
-  | length x >= 20 = tail x ++ y
-  | otherwise = x ++ y
 
 -- | A sensible starting state for the program.
 defaultState :: ProgramState
 defaultState = ProgramState
   { _cameraShift = CameraShift 3.8 6.8 15
   , _mouseState = MouseState Up Up Up
-  , _angleState = 0.0
   , _dragState = (MouseState Up Up Up, Nothing)
-  , _extraInfo = []
-  , _flags = [ Flags, Lights, FramesPerSecond
-             , Main.Fill, DragInfo, MouseInfo, ShiftInfo
-             , Shapes, Axis, FocusPoint
-             ]
   , _timeState = (secondsToDiffTime 0, 0, 0)
   , _cameraFocus = (Vertex3 0 0 0 : map tvd (cubeCorners cubeSize), 0)
   }
@@ -214,100 +176,31 @@ display :: IORef ProgramState -> DisplayCallback
 display ps = do
   programState <- get ps
 
-  let l = Lights `elem` programState ^. flags
-      f = Main.Fill `elem` programState ^. flags
-      CameraShift theta phi radius = programState ^. cameraShift
+  let CameraShift theta phi radius = programState ^. cameraShift
       (points, focn)  = programState ^. cameraFocus
       Vertex3 x y z = points !! focn
 
   clear [ColorBuffer, DepthBuffer]
 
-  when (Axis `elem` programState ^. flags)
-    (preservingMatrix drawAxis >> return ())
-
   loadIdentity
   preservingMatrix (renderInfo programState)
-  lighting $= if' l Enabled Disabled
 
   -- Camera movement
-  let [nx, ny, nz] = [ radius * cos theta * sin phi
-                     , radius * sin theta * sin phi
-                     , radius * cos phi
-                     ]
-
   translate $ Vector3 x y (-z + (-radius))
   rotate ((theta - pi) * (180 / pi)) $ Vector3 1 0 0
   rotate ((-phi) * (180/pi)) $ Vector3 0 1 0
 
-  preservingColor . preservingMatrix $ do
-    drawCube f
+  preservingColor . preservingMatrix $ drawCube True
 
-  ps $$! programState & angleState %~ (+ 1.0)
-  writeLog ps [nx, ny, nz]
   updateTime ps
 
   swapBuffers
 
--- | Draws the X, Y and Z axis from origin towards positive <relatively
--- large number>. X axis is red, Y axis is green and Z axis is green.
--- Additionally, horizontal spacers are drawn every 1 unit on each axis.
-drawAxis :: IO DisplayList
-drawAxis = do
-
-  defineNewList CompileAndExecute $ do
-    c <- get currentColor
-    let len = 500.0
-        step = 1
-        apply3 f (x, y, z) = (f x, f y, f z)
-        xv = (1.0, 0, 0)
-        yv = (0.0, 1.0, 0)
-        zv = (0.0, 0.0, 1.0)
-        rl = [step , step + step .. len]
-    preservingMatrix $ do
-      -- X
-      color $ Color3 1.0 0.0 (0.0 :: GLfloat)
-
-      renderPrimitive Lines $ mapM_ vertex3f $
-        [ (0.0, 0.0, 0.0)
-        , apply3 (* len) xv
-        ] ++ concat (map (\x -> [(x, 0, -1) , (x, 0, 1)] ) rl)
-
-      -- Y
-      color $ Color3 0.0 1.0 (0.0 :: GLfloat)
-
-      renderPrimitive Lines $ mapM_ vertex3f $
-        [ (0.0, 0.0, 0.0)
-        , apply3 (* len) yv
-        ] ++ concat (map (\x -> [(-1, x, 0) , (1, x, 0)] ) rl)
-          ++ concat (map (\x -> [(0, x, -1) , (0, x, 1)] ) rl)
-
-      -- Z
-      color $ Color3 0.0 0.0 (1.0 :: GLfloat)
-
-      renderPrimitive Lines $ mapM_ vertex3f $
-        [ (0.0, 0.0, 0.0)
-        , apply3 (* len) zv
-        ] ++ concat (map (\x -> [(-1, 0, x) , (1, 0, x)] ) rl)
-
-    color c
-
 -- | Renders information using the current 'ProgramState'
+-- For this submission we only render FPS.
 renderInfo :: ProgramState -> IO ()
 renderInfo p = do
-  let h f g = if f `elem` p ^. flags then [p ^. g ^. to show] else []
-      info = if Main.Info `elem` p ^. flags
-             then (if ExtraInfo `elem` p ^. flags then p ^. extraInfo else [])
-                  ++ h MouseInfo mouseState ++ h DragInfo dragState
-                  ++ h ShiftInfo cameraShift
-                  ++ if FocusPoint `elem` p ^. flags
-                     then let n = p ^. cameraFocus . _2
-                          in [show $ (p ^. cameraFocus . _1) !! n]
-                     else []
-                  ++ h Flags flags
-             else []
-      fps = if FramesPerSecond `elem` p ^. flags
-            then map (++ " FPS") (h FramesPerSecond (timeState . _3))
-            else []
+  let fps = (\x -> show x ++ " FPS") (p ^. timeState . _3 )
 
   c <- get currentColor
 
@@ -321,12 +214,8 @@ renderInfo p = do
     matrixMode $= Modelview 0
     preservingMatrix $ do
       color $ Color3 1.0 0.0 (0.0 :: GLfloat)
-      let positions = [ Vertex2 22 (x' :: GLint) | x' <- [22, 44 .. ] ]
-          r = zip positions . reverse $
-              if FramesPerSecond `elem` p ^. flags
-              then info ++ fps
-              else info
-      mapM_ (\(p', t) -> rasterPos p' >> renderString Helvetica18 t) r
+      rasterPos $ Vertex2 22 (22 :: GLfloat)
+      renderString Helvetica18 fps
       color c
 
 
@@ -338,10 +227,6 @@ drawFace filled s =
     vertex3f(s, -s, s)
     vertex3f(s, s, s)
     vertex3f(-s, s, s)
-
--- | Traditional if_then_else as a function.
-if' :: Bool -> a -> a -> a
-if' p f g = if p then f else g
 
 cubeSize :: GLfloat
 cubeSize = 0.5
@@ -371,13 +256,12 @@ drawCube filled = do
     r :: GLfloat -> GLfloat -> GLfloat -> GLfloat -> IO ()
     r r' x y z = rotate r' $ Vector3 x y z
 
-
 main :: IO ()
 main = do
   _ <- getArgsAndInitialize
   initialDisplayMode $= [DoubleBuffered, RGBMode, WithDepthBuffer]
 
-  _ <- createWindow "Spinning cube"
+  _ <- createWindow "Cube viewer"
   ps <- newIORef defaultState
   displayCallback $= display ps
   idleCallback $= Just idle
@@ -420,8 +304,6 @@ initGL = do
 
   shadeModel $= Smooth
 
-  clearColor $= Color4 0.5 1.0 0.75 0.0
-  -- clearColor $= Color4 0.0 0.0 0.0 0.0
   cullFace $= Just Back
   hint PerspectiveCorrection $= Nicest
 
@@ -441,7 +323,6 @@ initLight = do
       lSpec = Color4 0.99 0.99 0.99 1.0
       diff = Color4 0.7 0.7 0.7 1.0
 
-      l :: Light
       l = Light 0
 
   shadeModel $= Smooth
@@ -458,14 +339,6 @@ initLight = do
 
   lighting $= Enabled
   light l $= Enabled
-
--- | Add a line to '_extraInfo' in the program state.
-writeLog :: Show a => IORef ProgramState -> a -> IO ()
-writeLog ps s = get ps >>= \p -> ps $$! p & extraInfo %~ (++? [show s])
-
--- | Clears the '_extraInfo' log.
-clearLog :: IORef ProgramState -> IO ()
-clearLog ps = get ps >>= \p -> ps $$! p & extraInfo .~ []
 
 -- | Idle callback. We just redraw the frame whenever possible.
 idle :: IdleCallback
@@ -486,8 +359,6 @@ motion ps p@(Position newX newY) = do
       then do
         let CameraShift st sp sr = pState ^. cameraShift
 
-            zDifference = fromIntegral (newY - oldY) + sr
-
             dx = fromIntegral $ newX - oldX
             dy = fromIntegral $ newY - oldY
 
@@ -499,9 +370,8 @@ motion ps p@(Position newX newY) = do
               MouseState Down _ _ -> pState & cameraShift
                                      .~ CameraShift newTheta newPhi sr
               MouseState _ Down _ -> pState & cameraShift
-                                     .~ CameraShift st sp zDifference
-              MouseState _ _ _ -> pState
-
+                                     .~ CameraShift st sp (dy + sr)
+              MouseState {} -> pState
 
         ps $$! p' &  dragState . _2 .~ Just p
 
@@ -515,32 +385,14 @@ advanceFocus ps = do
   let (points, n) = p ^. cameraFocus
   ps $$! p & cameraFocus . _2 %~ if n >= (length points - 1)
                                  then const 0
-                                 else (+ 1)
+                                 else succ
 
 -- | Keyboard and mouse callback. Deals with flag toggling and camera shifting.
 keyboardMouse :: IORef ProgramState -> KeyboardMouseCallback
 keyboardMouse ps key Down _ _ = case key of
   Char 'q' -> exitSuccess
-  Char 'f'-> toggleFlag ps Main.Fill
   Char 'r' -> get ps >>= \p -> ps $$! p & cameraShift
                                .~ defaultState ^. cameraShift
-  Char 'x' -> onCoord cTheta (+ (pi / 200))
-  Char 'y' -> onCoord cPhi (+ (pi / 200))
-  Char 'z' -> onCoord cRadius succ
-  Char 'X' -> onCoord cTheta (flip (-) (pi / 200))
-  Char 'Y' -> onCoord cPhi (flip (-) (pi / 200))
-  Char 'Z' -> onCoord cRadius pred
-  Char 'l' -> toggleFlag ps Lights
-  Char 's' -> toggleFlag ps Flags
-  Char 'i' -> toggleFlag ps Main.Info
-  Char 'e' -> toggleFlag ps ExtraInfo
-  Char 'd' -> toggleFlag ps DragInfo
-  Char 'm' -> toggleFlag ps MouseInfo
-  Char 't' -> toggleFlag ps ShiftInfo
-  Char 'p' -> toggleFlag ps FramesPerSecond
-  Char 'M' -> toggleFlag ps Middle
-  Char 'S' -> toggleFlag ps Shapes
-  Char 'a' -> toggleFlag ps Axis
   Char 'n' -> advanceFocus ps
 
   MouseButton LeftButton -> setB leftButton
@@ -553,8 +405,6 @@ keyboardMouse ps key Down _ _ = case key of
     setB f = do
       p <- get ps
       ps $$! p & mouseState . f .~ Down & dragState . _2 .~ Nothing
-
-    onCoord f g = get ps >>= \p -> ps $$! p & cameraShift . f %~ g
 
 keyboardMouse ps key Up _ _ = case key of
   MouseButton LeftButton -> setB leftButton
