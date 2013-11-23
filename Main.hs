@@ -139,7 +139,7 @@ x ++? y
 -- | A sensible starting state for the program.
 defaultState :: ProgramState
 defaultState = ProgramState
-  { _cameraShift = CameraShift 2.04033 8.639376 15
+  { _cameraShift = CameraShift 3.8 6.8 15
   , _mouseState = MouseState Up Up Up
   , _angleState = 0.0
   , _dragState = (MouseState Up Up Up, Nothing)
@@ -208,6 +208,9 @@ updateTime ps = do
 
   ps $$! p' & timeState . _2 %~ succ
 
+preservingColor :: IO a -> IO ()
+preservingColor f = get currentColor >>= \c -> f >> color c
+
 -- | Display callback.
 display :: IORef ProgramState -> DisplayCallback
 display ps = do
@@ -217,7 +220,7 @@ display ps = do
       f = Main.Fill `elem` programState ^. flags
       CameraShift theta phi radius = programState ^. cameraShift
       (points, focn)  = programState ^. cameraFocus
-      r = points !! focn
+      Vertex3 x y z = points !! focn
 
   clear [ColorBuffer, DepthBuffer]
 
@@ -229,29 +232,17 @@ display ps = do
   lighting $= if' l Enabled Disabled
 
   -- Camera movement
-  let -- (nx, ny, nz) = (z + cos (x `mod'` 2 * pi), z + cos (y `mod'` 2 * pi), z)
-      points = [0, 0.05  .. 2 * pi]
-      points' = [0, 0.05 .. pi]
-
-      [nx, ny, nz] = [ radius * cos theta * sin phi
+  let [nx, ny, nz] = [ radius * cos theta * sin phi
                      , radius * sin theta * sin phi
                      , radius * cos phi
                      ]
-      col = [Color3 r g (b :: GLdouble) | r <- [0 .. 255], g <- [0 .. 255], b <- [0 .. 255]]
-      r' = 10
-      s = [ (r' * cos theta * sin phi, r' * sin theta * sin phi, r' * cos phi)
-          | theta <- points, phi <- points' ]
 
---  lookAt (Vertex3 nx ny nz) r (Vector3 0.0 1.0 0.0)
-  translate $ Vector3 0 0 (-radius)
+  translate $ Vector3 x y (-z + (-radius))
   rotate ((theta - pi) * (180 / pi)) $ Vector3 1 0 0
   rotate ((-phi) * (180/pi)) $ Vector3 0 1 0
 
---  preservingMatrix $ drawCube f
-  preservingMatrix $ do
-    renderPrimitive Points $ mapM_ (\(x', x'') -> color x'' >> vertex3f x') (zip s col)
-
-
+  preservingColor . preservingMatrix $ do
+    drawCube f
 
   ps $$! programState & angleState %~ (+ 1.0)
   writeLog ps [nx, ny, nz]
@@ -356,7 +347,7 @@ if' :: Bool -> a -> a -> a
 if' p f g = if p then f else g
 
 cubeSize :: GLfloat
-cubeSize = 2.0
+cubeSize = 0.5
 
 -- | Draws a cube or a cube wireframe dependending on the passed in
 -- value.
@@ -504,7 +495,7 @@ motion ps p@(Position newX newY) = do
             dx = fromIntegral $ newX - oldX
             dy = fromIntegral $ newY - oldY
 
-            newTheta = st + dy * (pi / 8000)
+            newTheta = st + dy * (pi / 800)
             newPhi = sp - dx * (pi / 800)
 
 
