@@ -57,9 +57,9 @@ data MouseState = MouseState { _leftButton :: KeyState
                              } deriving (Eq, Show)
 
 -- | The position of the eye camera from the origin.
-data CameraShift = CameraShift { _cX :: GLdouble
-                               , _cY :: GLdouble
-                               , _cZ :: GLdouble
+data CameraShift = CameraShift { _cTheta :: GLdouble
+                               , _cPhi :: GLdouble
+                               , _cRadius :: GLdouble
                                }
                       deriving (Eq, Show)
 
@@ -139,7 +139,7 @@ x ++? y
 -- | A sensible starting state for the program.
 defaultState :: ProgramState
 defaultState = ProgramState
-  { _cameraShift = CameraShift (-350) 350 40
+  { _cameraShift = CameraShift 2.04033 8.639376 15
   , _mouseState = MouseState Up Up Up
   , _angleState = 0.0
   , _dragState = (MouseState Up Up Up, Nothing)
@@ -215,8 +215,7 @@ display ps = do
 
   let l = Lights `elem` programState ^. flags
       f = Main.Fill `elem` programState ^. flags
-      CameraShift x' y' z' = programState ^. cameraShift
-      (x, y, z) = (realToFrac $ x' / 10, realToFrac $ y' / 10, realToFrac z') :: (GLdouble, GLdouble, GLdouble)
+      CameraShift theta phi radius = programState ^. cameraShift
       (points, focn)  = programState ^. cameraFocus
       r = points !! focn
 
@@ -230,25 +229,32 @@ display ps = do
   lighting $= if' l Enabled Disabled
 
   -- Camera movement
-  let (nx, ny, nz) = (z + cos (x `mod'` 2 * pi), z + cos (y `mod'` 2 * pi), z)
-  lookAt (Vertex3 nx ny z) r (Vector3 0.0 1.0 0.0)
-  -- rotate y $ Vector3 1.0 0.0 0.0
-  -- rotate x $ Vector3 0.0 1.0 0.0
+  let -- (nx, ny, nz) = (z + cos (x `mod'` 2 * pi), z + cos (y `mod'` 2 * pi), z)
+      points = [0, 0.05  .. 2 * pi]
+      points' = [0, 0.05 .. pi]
+
+      [nx, ny, nz] = [ radius * cos theta * sin phi
+                     , radius * sin theta * sin phi
+                     , radius * cos phi
+                     ]
+      col = [Color3 r g (b :: GLdouble) | r <- [0 .. 255], g <- [0 .. 255], b <- [0 .. 255]]
+      r' = 10
+      s = [ (r' * cos theta * sin phi, r' * sin theta * sin phi, r' * cos phi)
+          | theta <- points, phi <- points' ]
+
+--  lookAt (Vertex3 nx ny nz) r (Vector3 0.0 1.0 0.0)
+  translate $ Vector3 0 0 (-radius)
+  rotate ((theta - pi) * (180 / pi)) $ Vector3 1 0 0
+  rotate ((-phi) * (180/pi)) $ Vector3 0 1 0
 
 --  preservingMatrix $ drawCube f
   preservingMatrix $ do
-    let points :: [GLfloat]
-        points = [0, 0.1  .. 2 * pi]
-        points' = [0, 0.1 .. pi]
-        r' = 52
-        s = [ (r' * cos theta * sin phi, r' * sin theta * sin phi, r' * cos phi)
-            | theta <- points, phi <- points'  ]
-    renderPrimitive LineLoop $ mapM_ vertex3f s
+    renderPrimitive Points $ mapM_ (\(x', x'') -> color x'' >> vertex3f x') (zip s col)
 
 
 
   ps $$! programState & angleState %~ (+ 1.0)
-
+  writeLog ps [nx, ny, nz]
   updateTime ps
 
   swapBuffers
@@ -490,24 +496,29 @@ motion ps p@(Position newX newY) = do
     Just (Position oldX oldY) ->
       if oldMS == nowMS
       then do
-        let CameraShift sx sy sz = pState ^. cameraShift
-            xDifference = fromIntegral (newX - oldX) + sx
-            yDifference = fromIntegral (newY - oldY) + sy
-            zDifference = fromIntegral (newY - oldY) + sz
+        let CameraShift st sp sr = pState ^. cameraShift
+--            xDifference = fromIntegral (newX - oldX) + sx
+--            yDifference = fromIntegral (newY - oldY) + sy
+            zDifference = fromIntegral (newY - oldY) + sr
+
+            dx = fromIntegral $ newX - oldX
+            dy = fromIntegral $ newY - oldY
+
+            newTheta = st + dy * (pi / 8000)
+            newPhi = sp - dx * (pi / 800)
+
 
         let p' = case nowMS of
               MouseState Down _ _ -> pState & cameraShift
-                                     .~ CameraShift xDifference yDifference sz
+                                     .~ CameraShift newTheta newPhi sr
               MouseState _ Down _ -> pState & cameraShift
-                                     .~ CameraShift sx sy zDifference
+                                     .~ CameraShift st sp zDifference
               MouseState _ _ _ -> pState
 
 
         ps $$! p' &  dragState . _2 .~ Just p
-        writeLog ps p
 
-      else do ps $$! pState & dragState .~ (nowMS, Just p)
-              writeLog ps p
+      else ps $$! pState & dragState .~ (nowMS, Just p)
 
 -- | Advances camera focus between pre-defined points on the cube. Effectively a
 -- poor-man's zipper.
@@ -526,12 +537,12 @@ keyboardMouse ps key Down _ _ = case key of
   Char 'f'-> toggleFlag ps Main.Fill
   Char 'r' -> get ps >>= \p -> ps $$! p & cameraShift
                                .~ defaultState ^. cameraShift
-  Char 'x' -> onCoord cX succ
-  Char 'y' -> onCoord cY succ
-  Char 'z' -> onCoord cZ succ
-  Char 'X' -> onCoord cX pred
-  Char 'Y' -> onCoord cY pred
-  Char 'Z' -> onCoord cZ pred
+  Char 'x' -> onCoord cTheta (+ (pi / 200))
+  Char 'y' -> onCoord cPhi (+ (pi / 200))
+  Char 'z' -> onCoord cRadius succ
+  Char 'X' -> onCoord cTheta (flip (-) (pi / 200))
+  Char 'Y' -> onCoord cPhi (flip (-) (pi / 200))
+  Char 'Z' -> onCoord cRadius pred
   Char 'l' -> toggleFlag ps Lights
   Char 's' -> toggleFlag ps Flags
   Char 'i' -> toggleFlag ps Main.Info
@@ -549,21 +560,21 @@ keyboardMouse ps key Down _ _ = case key of
   MouseButton LeftButton -> setB leftButton
   MouseButton RightButton -> setB rightButton
   MouseButton MiddleButton -> setB middleButton
-  MouseButton WheelDown -> get ps >>= \p -> ps $$! p & cameraShift . cZ %~ succ
+  MouseButton WheelDown -> get ps >>= \p -> ps $$! p & cameraShift . cRadius %~ succ
   _ -> return ()
   where
     setB f = do
       p <- get ps
       ps $$! p & mouseState . f .~ Down & dragState . _2 .~ Nothing
-      clearLog ps
+      -- clearLog ps
 
     onCoord f g = get ps >>= \p -> ps $$! p & cameraShift . f %~ g
 
 keyboardMouse ps key Up _ _ = case key of
-  MouseButton LeftButton -> setB leftButton >> clearLog ps
+  MouseButton LeftButton -> setB leftButton -- >> clearLog ps
   MouseButton RightButton -> setB rightButton
   MouseButton MiddleButton -> setB middleButton
-  MouseButton WheelUp -> get ps >>= \p -> ps $$! p & cameraShift . cZ %~ pred
+  MouseButton WheelUp -> get ps >>= \p -> ps $$! p & cameraShift . cRadius %~ pred
   _ -> return ()
   where
     setB f = get ps >>= \p -> ps $$! p & mouseState . f .~ Up
