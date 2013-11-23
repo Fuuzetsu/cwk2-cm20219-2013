@@ -57,7 +57,7 @@ data MouseState = MouseState { _leftButton   :: KeyState
                              } deriving (Eq, Show)
 
 -- | The position of the eye camera from the origin.
-data CameraShift = CameraShift { _cTheta  :: GLdouble
+data CameraRotation = CameraRotation { _cTheta  :: GLdouble
                                , _cPhi    :: GLdouble
                                , _cRadius :: GLdouble
                                }
@@ -67,7 +67,7 @@ data CameraShift = CameraShift { _cTheta  :: GLdouble
 -- results in pretty hefty frame rate drop on my (very slow) netbook so it's
 -- not advisable to use this unless it's for debugging.
 data Flag = Info -- ^ Display information on the screen
-          | ShiftInfo -- ^ Information on current 'CameraShift'
+          | ShiftInfo -- ^ Information on current 'CameraRotation'
           | DragInfo -- ^ Show information on mouse drag.
           | MouseInfo -- ^ Information on 'MouseState'
           | FramesPerSecond -- ^ Renders frames per seconds. Ironically
@@ -82,7 +82,7 @@ data Flag = Info -- ^ Display information on the screen
 -- considering we're running in the IO monad anyway for OpenGL/GLUT but it's not
 -- ideal either.
 data ProgramState = ProgramState
-                      { _cameraShift :: CameraShift
+                      { _cameraRotation :: CameraRotation
                       , _mouseState  :: MouseState
                       , _dragState   :: (MouseState, Maybe Position)
                                       -- ^ The second element of the pair
@@ -99,13 +99,13 @@ data ProgramState = ProgramState
 -- We generate lenses with Template Haskell here.
 makeLenses ''MouseState
 makeLenses ''ProgramState
-makeLenses ''CameraShift
+makeLenses ''CameraRotation
 
 
 -- | A sensible starting state for the program.
 defaultState :: ProgramState
 defaultState = ProgramState
-  { _cameraShift = CameraShift 3.8 6.8 15
+  { _cameraRotation = CameraRotation 3.8 6.8 15
   , _mouseState = MouseState Up Up Up
   , _dragState = (MouseState Up Up Up, Nothing)
   , _timeState = (secondsToDiffTime 0, 0, 0)
@@ -118,10 +118,10 @@ defaultState = ProgramState
 ($$!) = ($=!)
 infixl 0 $$!
 
--- | Helper to convert a 'CameraShift' to 'Vertex3' parametrised
+-- | Helper to convert a 'CameraRotation' to 'Vertex3' parametrised
 -- by 'GLdouble'.
-ctvf :: CameraShift -> Vertex3 GLdouble
-ctvf (CameraShift x y z) = Vertex3 x y z
+ctvf :: CameraRotation -> Vertex3 GLdouble
+ctvf (CameraRotation x y z) = Vertex3 x y z
 
 tvd :: (GLfloat, GLfloat, GLfloat) -> Vertex3 GLdouble
 tvd (x, y, z) = Vertex3 (realToFrac x) (realToFrac y) (realToFrac z)
@@ -176,7 +176,7 @@ display :: IORef ProgramState -> DisplayCallback
 display ps = do
   programState <- get ps
 
-  let CameraShift theta phi radius = programState ^. cameraShift
+  let CameraRotation theta phi radius = programState ^. cameraRotation
       (points, focn)  = programState ^. cameraFocus
       Vertex3 x y z = points !! focn
 
@@ -344,7 +344,7 @@ initLight = do
 idle :: IdleCallback
 idle = postRedisplay Nothing
 
--- | A callback for mouse dragging. Deals with offsetting the 'CameraShift' in
+-- | A callback for mouse dragging. Deals with offsetting the 'CameraRotation' in
 -- 'ProgramState'.
 motion :: IORef ProgramState -> MotionCallback
 motion ps p@(Position newX newY) = do
@@ -357,7 +357,7 @@ motion ps p@(Position newX newY) = do
     Just (Position oldX oldY) ->
       if oldMS == nowMS
       then do
-        let CameraShift st sp sr = pState ^. cameraShift
+        let CameraRotation st sp sr = pState ^. cameraRotation
 
             dx = fromIntegral $ newX - oldX
             dy = fromIntegral $ newY - oldY
@@ -367,10 +367,10 @@ motion ps p@(Position newX newY) = do
 
 
         let p' = case nowMS of
-              MouseState Down _ _ -> pState & cameraShift
-                                     .~ CameraShift newTheta newPhi sr
-              MouseState _ Down _ -> pState & cameraShift
-                                     .~ CameraShift st sp (dy + sr)
+              MouseState Down _ _ -> pState & cameraRotation
+                                     .~ CameraRotation newTheta newPhi sr
+              MouseState _ Down _ -> pState & cameraRotation
+                                     .~ CameraRotation st sp (dy + sr)
               MouseState {} -> pState
 
         ps $$! p' &  dragState . _2 .~ Just p
@@ -391,14 +391,14 @@ advanceFocus ps = do
 keyboardMouse :: IORef ProgramState -> KeyboardMouseCallback
 keyboardMouse ps key Down _ _ = case key of
   Char 'q' -> exitSuccess
-  Char 'r' -> get ps >>= \p -> ps $$! p & cameraShift
-                               .~ defaultState ^. cameraShift
+  Char 'r' -> get ps >>= \p -> ps $$! p & cameraRotation
+                               .~ defaultState ^. cameraRotation
   Char 'n' -> advanceFocus ps
 
   MouseButton LeftButton -> setB leftButton
   MouseButton RightButton -> setB rightButton
-  MouseButton MiddleButton -> setB middleButton
-  MouseButton WheelDown -> get ps >>= \p -> ps $$! p & cameraShift . cRadius
+  MouseButton MiddleButton -> advanceFocus ps >> setB middleButton
+  MouseButton WheelDown -> get ps >>= \p -> ps $$! p & cameraRotation . cRadius
                                             %~ succ
   _ -> return ()
   where
@@ -410,7 +410,7 @@ keyboardMouse ps key Up _ _ = case key of
   MouseButton LeftButton -> setB leftButton
   MouseButton RightButton -> setB rightButton
   MouseButton MiddleButton -> setB middleButton
-  MouseButton WheelUp -> get ps >>= \p -> ps $$! p & cameraShift . cRadius
+  MouseButton WheelUp -> get ps >>= \p -> ps $$! p & cameraRotation . cRadius
                                           %~ pred
   _ -> return ()
   where
